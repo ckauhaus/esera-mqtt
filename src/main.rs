@@ -4,32 +4,47 @@ extern crate log;
 // use rumqtt::{MqttClient, MqttOptions, QoS};
 // use std::{thread, time::Duration};
 // use crossbeam_channel::select;
-use anyhow::{Result, Context, anyhow};
-use structopt::StructOpt;
-use std::net::IpAddr;
+use anyhow::{anyhow, Context, Result};
+use chrono::Utc;
 use dotenv::dotenv;
-use tokio::io::{BufReader, AsyncBufReadExt, AsyncWriteExt};
-use std::str::FromStr;
+use std::net::IpAddr;
+use structopt::StructOpt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use chrono::{Utc};
 
-pub struct ControllerConn {
-    pub conn: BufReader<TcpStream>,
-    pub contno: u8,
+mod owb;
+use owb::{Resp, Resp::*, DevInfo};
+
+struct ControllerConn {
+    conn: BufReader<TcpStream>,
+    contno: u8,
+    devices: Vec<Option<DevInfo>>,
 }
 
 impl ControllerConn {
     async fn new(host: &str, port: u16, contno: u8) -> Result<Self> {
         let addr: IpAddr = host.parse()?;
-        let e = TcpStream::connect((addr, port)).await.context("Failed to connect to the controller")?;
-        let mut s = Self { conn: BufReader::new(e), contno };
+        let e = TcpStream::connect((addr, port))
+            .await
+            .context("Failed to connect to the controller")?;
+        let mut s = Self {
+            conn: BufReader::new(e),
+            contno,
+            devices: Vec::new()
+        };
         s.expect("SET,SYS,DATAPRINT,1", "DATAPRINT|1").await?;
-        s.expect(format!("SET,SYS,CONTNO,{}", contno), format!("CONTNO|{}", contno)).await?;
+        s.expect(
+            format!("SET,SYS,CONTNO,{}", contno),
+            format!("CONTNO|{}", contno),
+        )
+        .await?;
         let now = Utc::now();
         let date = now.format("%d.%m.%y");
         let time = now.format("%H:%M:%S");
-        s.expect(format!("SET,SYS,DATE,{}", date), format!("DATE|{}", date)).await?;
-        s.expect(format!("SET,SYS,TIME,{}", time), format!("TIME|{}", time)).await?;
+        s.expect(format!("SET,SYS,DATE,{}", date), format!("DATE|{}", date))
+            .await?;
+        s.expect(format!("SET,SYS,TIME,{}", time), format!("TIME|{}", time))
+            .await?;
         Ok(s)
     }
 
@@ -49,44 +64,63 @@ impl ControllerConn {
             self.conn.read_line(&mut s).await?;
             debug!("expect: got {:?}", s.trim());
             if s.contains(&exp) {
-                return Ok(())
+                return Ok(());
             }
         }
         Err(anyhow!("Did not receive expected output {:?}", exp))
     }
-}
 
-#[tokio::main]
-async fn run(opt: Opt) -> Result<()> {
-    let mut ctrl = ControllerConn::new(&opt.esera_host, opt.esera_port, opt.contno).await?;
-    let mut s = String::new();
-    loop {
-        ctrl.dispatch().await?;
+    async fn dispatch(&mut self) -> Result<()> {
+        let mut s = String::with_capacity(80);
+        loop {
+            self.conn.read_line(&mut s).await?;
+            debug!("dispatch({:?})", s);
+            match Resp::parse(self.contno, &mut s) {
+                Ok((rest, resp)) => {
+                    s = rest;
+                    match resp {
+                        Dev(dev) => {
+// XXX query device list if unknown device number
+                            println!("{:?}", dev);
+                        }
+                        Other(dev, msg) => debug!("Other({}, {})", dev.as_str(), msg),
+                        ERR(e) => warn!("1-Wire error: {}", e.as_str()),
+                        _ => ()
+                    }
+                },
+                Err(e) => {
+                    error!("{}", e);
+                    s.clear()
+                }
+            }
+        }
     }
 }
 
 #[derive(StructOpt, Debug)]
 struct Opt {
-    #[structopt(short = "H", long, env = "MQTT_HOST", default_value="localhost")]
+    #[structopt(short = "H", long, env = "MQTT_HOST", default_value = "localhost")]
     mqtt_host: String,
-    #[structopt(short = "p", long, env = "MQTT_PORT", default_value="1883")]
+    #[structopt(short = "p", long, env = "MQTT_PORT", default_value = "1883")]
     mqtt_port: u16,
-    #[structopt(short = "u", long, env = "MQTT_USER", default_value="esera-mqtt")]
+    #[structopt(short = "u", long, env = "MQTT_USER", default_value = "esera-mqtt")]
     mqtt_user: String,
     #[structopt(short = "P", long, env = "MQTT_PASS")]
     mqtt_pass: Option<String>,
     #[structopt(short = "e", long, env = "ESERA_HOST")]
     esera_host: String,
-    #[structopt(short = "o", long, env = "ESERA_PORT", default_value="5000")]
+    #[structopt(short = "o", long, env = "ESERA_PORT", default_value = "5000")]
     esera_port: u16,
-    #[structopt(short, long, env = "ESERA_CONTNO", default_value="1")]
-    contno: u8
+    #[structopt(short, long, env = "ESERA_CONTNO", default_value = "1")]
+    contno: u8,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     dotenv().ok();
     env_logger::init();
     let opt = Opt::from_args();
     debug!("{:?}", opt);
-    run(opt)
+    let mut ctrl = ControllerConn::new(&opt.esera_host, opt.esera_port, opt.contno).await?;
+    ctrl.dispatch().await
 }

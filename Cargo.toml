@@ -6,11 +6,14 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = "1.0"
+chrono = "0.4"
 crossbeam-channel = "0.4"
-rumqtt = "0.31"
-tokio = { version = "0.2.8", features = ["tcp", "io-util", "rt-threaded", "macros"] }
-structopt = "0.3"
 dotenv = "0.15"
 env_logger = "0.7"
 log = "0.4"
-chrono = "0.4"
+nom = "5.1"
+rumqtt = "0.31"
+smallstr = "0.1.0"
+structopt = "0.3"
+tokio = { version = "0.2.8", features = ["tcp", "io-util", "rt-threaded", "macros"] }
+uuid = { version = "0.8", features = ["v1"] }
