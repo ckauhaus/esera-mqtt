@@ -11,14 +11,16 @@ use std::net::IpAddr;
 use structopt::StructOpt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 mod owb;
-use owb::{Resp, Resp::*, DevInfo};
+use owb::{DevInfo, Msg, Resp, Resp::*};
 
 struct ControllerConn {
     conn: BufReader<TcpStream>,
     contno: u8,
     devices: Vec<Option<DevInfo>>,
+    buf: String,
 }
 
 impl ControllerConn {
@@ -30,14 +32,10 @@ impl ControllerConn {
         let mut s = Self {
             conn: BufReader::new(e),
             contno,
-            devices: Vec::new()
+            devices: vec![None; 30],
+            buf: String::with_capacity(80),
         };
         s.expect("SET,SYS,DATAPRINT,1", "DATAPRINT|1").await?;
-        s.expect(
-            format!("SET,SYS,CONTNO,{}", contno),
-            format!("CONTNO|{}", contno),
-        )
-        .await?;
         let now = Utc::now();
         let date = now.format("%d.%m.%y");
         let time = now.format("%H:%M:%S");
@@ -45,6 +43,8 @@ impl ControllerConn {
             .await?;
         s.expect(format!("SET,SYS,TIME,{}", time), format!("TIME|{}", time))
             .await?;
+        s.expect("SET,SYS,DATATIME,10", "DATATIME|10").await?;
+        s.get_device_info().await?;
         Ok(s)
     }
 
@@ -57,9 +57,9 @@ impl ControllerConn {
     async fn expect<S: AsRef<str>, T: AsRef<str>>(&mut self, send: S, expect: T) -> Result<()> {
         debug!("expect({:?}, {:?})", send.as_ref(), expect.as_ref());
         self.write_line(send.as_ref()).await?;
-        let mut s = String::with_capacity(80);
         let exp = format!("_{}\r\n", expect.as_ref());
-        for _ in 0..10 {
+        let mut s = String::with_capacity(80);
+        for _ in 0..50 {
             s.clear();
             self.conn.read_line(&mut s).await?;
             debug!("expect: got {:?}", s.trim());
@@ -70,27 +70,45 @@ impl ControllerConn {
         Err(anyhow!("Did not receive expected output {:?}", exp))
     }
 
-    async fn dispatch(&mut self) -> Result<()> {
-        let mut s = String::with_capacity(80);
+    async fn get_device_info(&mut self) -> Result<()> {
+        debug!("request device list");
+        self.write_line("GET,OWB,LISTALL1").await?;
+        Ok(())
+    }
+
+    fn update_device_info(&mut self, devinfo: DevInfo) {
+        info!("{:?}", devinfo);
+        let n = devinfo.n as usize;
+        if n >= self.devices.len() {
+            self.devices.resize_with(n + 1, Option::default)
+        }
+        self.devices[n] = Some(devinfo);
+    }
+
+    async fn dispatch(&mut self, mut tx: Sender<Msg>) -> Result<()> {
         loop {
-            self.conn.read_line(&mut s).await?;
-            debug!("dispatch({:?})", s);
-            match Resp::parse(self.contno, &mut s) {
+            self.conn.read_line(&mut self.buf).await?;
+            debug!("dispatch({:?})", self.buf);
+            match Resp::parse(self.contno, &mut self.buf) {
                 Ok((rest, resp)) => {
-                    s = rest;
+                    self.buf = rest;
                     match resp {
-                        Dev(dev) => {
-// XXX query device list if unknown device number
-                            println!("{:?}", dev);
+                        Dev(msg) => {
+                            let n = msg.dev as usize;
+                            if n >= self.devices.len() || self.devices[n].is_none() {
+                                self.get_device_info().await?;
+                            }
+                            tx.send(msg).await?;
                         }
+                        Info(devinfo) => self.update_device_info(devinfo),
                         Other(dev, msg) => debug!("Other({}, {})", dev.as_str(), msg),
                         ERR(e) => warn!("1-Wire error: {}", e.as_str()),
-                        _ => ()
+                        _ => (),
                     }
-                },
+                }
                 Err(e) => {
                     error!("{}", e);
-                    s.clear()
+                    self.buf.clear()
                 }
             }
         }
@@ -122,5 +140,6 @@ async fn main() -> Result<()> {
     let opt = Opt::from_args();
     debug!("{:?}", opt);
     let mut ctrl = ControllerConn::new(&opt.esera_host, opt.esera_port, opt.contno).await?;
-    ctrl.dispatch().await
+    let (tx, rx) = channel(4);
+    ctrl.dispatch(tx).await
 }

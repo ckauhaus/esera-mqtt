@@ -15,5 +15,5 @@ nom = "5.1"
 rumqtt = "0.31"
 smallstr = "0.1.0"
 structopt = "0.3"
-tokio = { version = "0.2.8", features = ["tcp", "io-util", "rt-threaded", "macros"] }
+tokio = { version = "0.2.8", features = ["tcp", "io-util", "rt-threaded", "macros", "sync"] }
 uuid = { version = "0.8", features = ["v1"] }
