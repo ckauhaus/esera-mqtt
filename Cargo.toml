@@ -5,14 +5,18 @@ name = "esera-mqtt"
 version = "0.2.0"
 
 [dependencies]
-anyhow = "1.0.32"
+anyhow = "1"
 chrono = "0.4.15"
 dotenv = "0.15.0"
 env_logger = "0.7.1"
+futures = "0.3"
+lazy_static = "1.4.0"
 log = "0.4.11"
-nom = "5.1.2"
-rumqtt = "0.31.0"
+regex = "1.4.1"
+smol_str = "0.1.17"
 structopt = "0.3.17"
-tokio = { version = "0.2.22", features = ["full"] }
-tokio-util = "0.3.1"
-uuid = { version = "0.8.1", features = ["v4"] }
+tokio-util = { version = "0.4", features = ["codec", "io"]}
+tokio = { version = "0.3", features = ["full"] }
+
+[dev-dependencies]
+rexpect = "0.4.0"
