@@ -12,51 +12,6 @@ use tokio::net::TcpStream;
 use tokio::time::sleep;
 use tokio_util::codec::{Framed, LinesCodec};
 
-// #[derive(Debug, Clone)]
-// enum Command {
-//     Set(SetCommand),
-//     Get(GetCommand),
-// }
-// use Command::*;
-
-// #[derive(Debug, Clone)]
-// enum SetCommand {
-//     Sys(SetSys),
-//     Owb(SetOwb),
-//     Owd(SetOwd),
-// }
-// use SetCommand::*;
-
-// #[derive(Debug, Clone)]
-// enum SetSys {
-//     Date(NaiveDate),
-//     Time(NaiveTime),
-// }
-
-// #[derive(Debug, Clone)]
-// enum SetOwb {}
-
-// #[derive(Debug, Clone)]
-// enum SetOwd {}
-
-// #[derive(Debug, Clone)]
-// enum GetCommand {}
-
-// struct Controller {
-//     artno: u32,
-//     serno: String,
-//     fw: String,
-//     hw: String,
-//     contno: u8,
-// }
-
-// struct Response {
-//     contno: u8,
-//     entity: String,
-//     field: Option<u8>,
-//     value: String,
-// }
-
 #[derive(StructOpt, Debug)]
 struct Opt {
     #[structopt(short = "H", long)]

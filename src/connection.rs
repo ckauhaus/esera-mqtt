@@ -1,132 +1,164 @@
-use crate::parser::{Parser, Response, ResponseKind};
+use crate::parser::{PResult, Response, ResponseKind};
 
-use futures::stream::FusedStream;
-use futures::{Future, SinkExt, Stream, StreamExt};
+use bytes::{Bytes, BytesMut};
+use futures::{Future, FutureExt, SinkExt, Stream, StreamExt};
+use std::fmt;
 use std::net::ToSocketAddrs;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::net::TcpStream;
-use tokio_util::codec::{Framed, LinesCodec, LinesCodecError};
+use tokio::prelude::*;
 
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
-    Transport(#[from] LinesCodecError),
+    Transport(#[from] std::io::Error),
+    #[error("Trying to send unterminated line")]
+    Unterminated,
     #[error("While parsing controller response {1:?}: {0}")]
     Parse(#[source] crate::parser::Error, String),
     #[error("Controller connection closed while waiting for response")]
     Disconnected,
+    #[error("Read non-UTF8 data from controller: {0:?}")]
+    Utf8(Vec<u8>, #[source] std::str::Utf8Error),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-type ConnectionInner = Framed<TcpStream, LinesCodec>;
-
-pub struct Connection {
-    inner: ConnectionInner,
-    terminated: bool,
-    queue: std::collections::VecDeque<String>,
-    parser: Parser,
+#[derive(Debug)]
+pub struct Connection<S: fmt::Debug> {
+    inner: S,
+    queue: String,
 }
 
-impl Connection {
-    pub async fn new<A: ToSocketAddrs>(addr: A) -> Result<Self, std::io::Error> {
+impl Connection<TcpStream> {
+    pub async fn new<A: ToSocketAddrs>(addr: A) -> std::io::Result<Self> {
         let addr: Vec<_> = addr.to_socket_addrs()?.collect();
         info!("Connecting to {:?}", addr);
-        let s = TcpStream::connect(&*addr).await?;
-        Ok(Self {
-            inner: Framed::new(s, LinesCodec::new()),
-            terminated: false,
-            queue: Default::default(),
-            parser: Parser::new(),
-        })
+        Ok(Self::from_stream(TcpStream::connect(&*addr).await?))
     }
+}
 
-    pub fn send<'a, S: AsRef<str> + 'a>(
-        &'a mut self,
-        line: S,
-    ) -> impl Future<Output = Result<(), LinesCodecError>> + 'a {
-        debug!("<<< {}", line.as_ref());
-        self.inner.send(line)
+impl<C: fmt::Debug> Connection<C> {
+    pub fn from_stream(stream: C) -> Self {
+        Self {
+            inner: stream,
+            queue: String::with_capacity(4096),
+        }
     }
+}
 
-    fn parse(&mut self, line: &str) -> Result<Response> {
-        self.parser
-            .parse(line)
-            .map_err(|e| Error::Parse(e, line.to_owned()))
+impl<C: AsyncWrite + Unpin + fmt::Debug> Connection<C> {
+    pub async fn send_line<S: AsRef<str>>(&mut self, line: S) -> Result<()> {
+        let line = line.as_ref();
+        debug!("<<< {}", line.trim_end());
+        self.inner.write_all(line.as_bytes()).await?;
+        if !line.ends_with("\n") {
+            self.inner.write(b"\n").await?;
+        }
+        Ok(())
     }
+}
 
+fn try_parse<'a, R, F>(input: &'a str, parse_fn: &F) -> Option<(usize, R, usize)>
+where
+    R: 'static + fmt::Debug,
+    F: Fn(&'a str) -> PResult<'a, R>,
+{
+    use nom::bytes::complete::take_while1;
+    use nom::character::complete::newline;
+    use nom::combinator::{map, opt};
+    use nom::sequence::{terminated, tuple};
+    tuple((
+        opt(terminated(take_while1(|_| true), newline)), // pre
+        parse_fn,                                        // mtch
+    ))(input)
+    .map(|(rem, (pre, mtch))| {
+        (
+            pre.map(|s| s.len() + 1).unwrap_or_default(),
+            mtch,
+            rem.len(),
+        )
+    })
+    .map_err(|e| e.map(|e| eprintln!("{}", nom::error::convert_error(input, e))))
+    .ok()
+}
+
+impl<C: AsyncRead + Unpin + fmt::Debug> Connection<C> {
     /// Waits until the specified response type is found in the stream.
-    pub async fn wait(&mut self, kind: ResponseKind) -> Result<Response> {
-        // XXX handle queue
-        while let Some(resp) = self.next().await {
-            let resp = resp?;
-            if ResponseKind::from(&resp) == kind {
-                return Ok(resp);
-            }
-        }
-        Err(Error::Disconnected)
-    }
-
-    /// Returns the first response which matches the filter criteria.
-    pub async fn select<F, R>(&mut self, filter: F) -> Result<R>
+    pub async fn wait<F, R>(&mut self, parse_fn: F) -> Result<R>
     where
-        F: Fn(&Response) -> Option<R>,
+        R: 'static + fmt::Debug,
+        for<'a> F: Fn(&'a str) -> PResult<'a, R>,
     {
-        // XXX handle queue
-        while let Some(resp) = self.next().await {
-            let resp = resp?;
-            if let Some(r) = filter(&resp) {
-                return Ok(r);
+        let mut buf = Vec::with_capacity(1 << 16);
+        loop {
+            // memory layout while looking for TIME statement:
+            // 1_KAL|1\n1_TIME|15:05:31\n1_EVT|15:05:32\n
+            // `--pre--'`--mtch---------'`--remainder---'
+            if let Some((pre, mtch, rem)) = try_parse(&self.queue, &parse_fn) {
+                debug!("got: [{}]{:?}[{}]", pre, mtch, rem);
+                let rem_cursor = self.queue.len() - rem;
+                self.queue.replace_range(pre..rem_cursor, "");
+                return Ok(mtch);
             }
-        }
-        Err(Error::Disconnected)
-    }
-}
-
-impl Stream for Connection {
-    type Item = Result<Response>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        if let Some(line) = self.queue.pop_front() {
-            return Poll::Ready(Some(self.parse(&line)));
-        }
-        if self.terminated {
-            return Poll::Ready(None);
-        }
-        match self.inner.poll_next_unpin(cx) {
-            Poll::Ready(Some(res)) => Poll::Ready(Some(
-                res.map_err(|e| Error::Transport(e)).and_then(|line| {
-                    debug!(">>> {}", line);
-                    self.parse(&line)
-                }),
-            )),
-            Poll::Ready(None) => {
-                self.terminated = true;
-                Poll::Ready(None)
+            // fill queue from the stream
+            buf.clear();
+            if self.inner.read(&mut buf).await? == 0 {
+                return Err(Error::Disconnected);
             }
-            Poll::Pending => Poll::Pending,
+            debug!(">>> {}", String::from_utf8_lossy(&buf).trim_end());
+            self.queue
+                .push_str(std::str::from_utf8(&buf).map_err(|e| Error::Utf8(buf.clone(), e))?);
         }
     }
 }
 
-impl FusedStream for Connection {
-    fn is_terminated(&self) -> bool {
-        self.terminated
-    }
-}
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::parser;
 
-impl Deref for Connection {
-    type Target = ConnectionInner;
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
+    use assert_matches::assert_matches;
+    use std::io::Cursor;
 
-impl DerefMut for Connection {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+    #[test]
+    fn try_parse_pre_mtch_rem() {
+        assert_eq!(
+            try_parse("1_KAL|1\n1_DATE|07.11.20\n1_DATAPRINT|1\n", &parser::date).unwrap(),
+            (8, "07.11.20".into(), 14)
+        )
+    }
+
+    #[tokio::test]
+    async fn wait_on_closed_reader_should_fail() {
+        let mut c = Connection::from_stream(Cursor::new(""));
+        assert_matches!(c.wait(parser::kal).await, Err(Error::Disconnected));
+    }
+
+    #[tokio::test]
+    async fn wait_should_return_match() {
+        let mut c = Connection::from_stream(Cursor::new("1_KAL|1\n"));
+        assert!(c.wait(parser::kal).await.is_ok());
+        assert_eq!(c.queue, "");
+    }
+
+    #[tokio::test]
+    async fn wait_should_cut_out_match() {
+        let mut c = Connection::from_stream(Cursor::new(
+            "\
+            1_KAL|1\n\
+            1_DATE|07.11.20\n\
+            1_DATAPRINT|1\n",
+        ));
+        assert_eq!(c.wait(parser::date).await.unwrap(), "07.11.20");
+        assert_eq!(
+            c.queue,
+            "\
+            1_KAL|1\n\
+            1_DATAPRINT|1\n"
+        );
     }
 }

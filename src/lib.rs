@@ -1,9 +1,12 @@
+#![allow(unused)]
+
 #[macro_use]
 extern crate log;
 use chrono::Local;
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use tokio::prelude::*;
 
 mod connection;
 mod parser;
@@ -24,7 +27,7 @@ impl Default for Device {
     fn default() -> Self {
         Self {
             serial: String::default(),
-            status: Status::default(),
+            status: Status::Unconfigured,
             artno: String::default(),
             name: String::default(),
             model: Box::new(Unconfigured {}),
@@ -86,23 +89,21 @@ pub struct Unconfigured {}
 
 impl Model for Unconfigured {}
 
-pub async fn init_controller(
-    conn: &mut Connection,
+pub async fn init_controller<C: AsyncRead + AsyncWrite + Unpin + fmt::Debug>(
+    conn: &mut Connection<C>,
 ) -> Result<DeviceTree, Box<dyn std::error::Error>> {
-    use parser::ResponseKind::*;
-
-    // conn.send("SET,SYS,DATAPRINT,1").await?;
-    // conn.wait(Dataprint).await?;
-    // let now = Local::now();
-    // conn.send(format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
-    //     .await?;
-    // conn.wait(Date).await?;
-    // conn.send(format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))
-    //     .await?;
-    // conn.wait(Time).await?;
-    conn.send("GET,SYS,INFO").await?;
-    let bus = Bus::default();
-    let csi = conn.select(parser::csi).await?;
+    conn.send_line("SET,SYS,DATAPRINT,1").await?;
+    conn.wait(parser::dataprint).await?;
+    let now = Local::now();
+    conn.send_line(format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
+        .await?;
+    conn.wait(parser::date).await?;
+    conn.send_line(format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))
+        .await?;
+    conn.wait(parser::time).await?;
+    // conn.send("GET,SYS,INFO").await?;
+    // let bus = Bus::default();
+    // let csi = conn.select(parser::csi).await?;
     // bus.set(0, Device::select(conn.first())?)
     // if let Response::ContNo(contno) = conn.pick("CONTNO").await? {
     //     devtree.insert(contno, bus);

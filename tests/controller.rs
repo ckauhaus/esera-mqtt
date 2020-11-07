@@ -7,13 +7,14 @@ use common::rexp_session;
 
 #[tokio::test]
 async fn init_sequence() {
+    env_logger::init();
     let addr = rexp_session(|mut r| {
         r.exp_string("SET,SYS,DATAPRINT,1")?;
         r.send_line("2_DATAPRINT|1")?;
         let now = Local::now();
         r.exp_string(&format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))?;
         r.send_line(&format!("2_DATE|{}", now.format("%d.%m.%y")))?;
-        r.exp_string(&format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))?;
+        r.exp_string(&format!("SET,SYS,TIME,{}", now.format("%H:%M:")))?;
         r.send_line(&format!("2_TIME|{}", now.format("%H:%M:%S")))?;
         r.exp_string("GET,SYS,INFO")?;
         r.send_line(&format!(
