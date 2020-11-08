@@ -18,12 +18,11 @@ thiserror = "1.0.21"
 nom = "6.0.0"
 strum = "0.19.5"
 strum_macros = "0.19.4"
-bytes = "0.6.0"
 
 [dev-dependencies]
-rexpect = "0.4.0"
 assert_matches = "1.4.0"
 maplit = "1.0.2"
-regex = "1.4.2"
-tokio-util = { version = "0.5.0", features = ["codec"] }
 pretty_assertions = "0.6.1"
+regex = "1.4.2"
+rexpect = "0.4.0"
+tokio-util = { version = "0.5.0", features = ["codec"] }

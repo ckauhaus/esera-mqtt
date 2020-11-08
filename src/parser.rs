@@ -76,9 +76,9 @@ use nom::character::streaming::{
     alphanumeric0, alphanumeric1, anychar, char as cc, digit1, line_ending, none_of,
     not_line_ending,
 };
-use nom::combinator::{all_consuming, map, map_res, opt, recognize, value};
+use nom::combinator::{all_consuming, map, map_res, not, opt, peek, recognize, value};
 use nom::error::{Error as NomError, ErrorKind, ParseError};
-use nom::multi::{many0, many1, separated_list1};
+use nom::multi::{many0, many1, many_m_n};
 use nom::sequence::{preceded, separated_pair, terminated, tuple};
 
 fn contno(i: &str) -> PResult<u8> {
@@ -89,44 +89,46 @@ fn identifier(i: &str) -> PResult<&str> {
     recognize(many1(alt((alphanumeric1, tag("_")))))(i)
 }
 
-fn line(i: &str) -> PResult<&str> {
-    terminated(not_line_ending, line_ending)(i)
-}
-
 fn statement<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, u8> {
     terminated(contno, terminated(tag(key), cc('|')))
 }
 
+fn remainder(i: &str) -> PResult<&str> {
+    terminated(not_line_ending, line_ending)(i)
+}
+
 pub fn kal(i: &str) -> PResult<Response> {
-    value(Response::Keepalive, terminated(statement("KAL"), line))(i)
+    value(Response::Keepalive, terminated(statement("KAL"), remainder))(i)
 }
 
 pub fn dataprint(i: &str) -> PResult<bool> {
     let (i, _) = statement("DATAPRINT")(i)?;
-    map_res(line, |s: &str| match s {
+    map_res(remainder, |s: &str| match s {
         "0" => Ok(false),
         "1" => Ok(true),
         _ => Err(NomError::new(s, ErrorKind::ParseTo)),
     })(i)
 }
 
+// XXX recognize [0-9.]+
 pub fn date(i: &str) -> PResult<String> {
-    map(preceded(statement("DATE"), line), |s| s.to_owned())(i)
+    map(preceded(statement("DATE"), remainder), |s| s.to_owned())(i)
 }
 
+// XXX recognize [0-9:]+
 pub fn time(i: &str) -> PResult<String> {
-    map(preceded(statement("TIME"), line), |s| s.to_owned())(i)
+    map(preceded(statement("TIME"), remainder), |s| s.to_owned())(i)
 }
 
 pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
-    let (i, _) = terminated(statement("LST3"), line)(i)?;
-    many1(map_res(
+    let (i, _) = terminated(statement("LST3"), remainder)(i)?;
+    let (i, res) = many1(map_res(
         tuple((
             preceded(tuple((tag("LST|"), contno)), alphanumeric1),
             preceded(cc('|'), alphanumeric1),
             preceded(cc('|'), identifier),
             preceded(cc('|'), alphanumeric1),
-            opt(preceded(cc('|'), till_nl)),
+            opt(preceded(cc('|'), not_line_ending)),
             line_ending,
         )),
         |(busid, serial, status, artno, name, _nl)| -> Result<_, Error> {
@@ -138,7 +140,9 @@ pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
                 name: name.map(|n| n.to_owned()),
             })
         },
-    ))(i)
+    ))(i)?;
+    let _followed_by_non_list = many_m_n(4, 4, anychar)(i)?;
+    Ok((i, res))
 }
 
 // XXX unsure about API
@@ -189,17 +193,27 @@ mod test {
     }
 
     #[test]
-    fn parse_lst3() {
+    fn signal_incomplete_list() {
         let input = "\
 1_LST3|0:02:54\n\
+LST|1_OWD1|EF000019096A4026|S_0|11150\n";
+        assert_matches!(lst3(input).unwrap_err(), nom::Err::Incomplete(_))
+    }
+
+    #[test]
+    fn parse_lst3() {
+        let input = "\
+1_LST3|00:02:54\n\
 LST|1_OWD1|EF000019096A4026|S_0|11150\n\
 LST|1_OWD2|4300001982956429|S_0|DS2408\n\
 LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none\n\
 1_EVT|0:02:55\n";
-        let res = lst3(&input[..]);
+        let res = lst3(input);
         dbg!(&res);
+        let (rem, mtch) = res.unwrap();
+        assert_eq!(rem, "1_EVT|0:02:55\n");
         assert_eq!(
-            res.unwrap().1,
+            mtch,
             vec![
                 List3Item {
                     busid: "OWD1".into(),
