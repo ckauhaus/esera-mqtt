@@ -10,8 +10,6 @@ pub enum Error {
     Unexpected(String),
     #[error("Invalid data format: {0}")]
     Invalid(String),
-    #[error("Failed to parse number")]
-    Decimal(#[from] std::num::ParseIntError),
     #[error("Invalid UTF-8 in controller reponse")]
     Utf8(#[from] std::str::Utf8Error),
     #[error("Invalid UTF-8 in controller reponse")]
@@ -60,6 +58,108 @@ pub enum Response {
     Unkown(String),
 }
 
+use nom::branch::alt;
+use nom::bytes::streaming::{tag, take_till1};
+use nom::character::streaming::{
+    alphanumeric0, alphanumeric1, anychar, char as cc, digit1, line_ending, none_of,
+    not_line_ending, one_of,
+};
+use nom::combinator::{all_consuming, map, map_res, not, opt, peek, recognize, value};
+use nom::error::{Error as NomError, ErrorKind, ParseError};
+use nom::multi::{many0, many1, many_m_n};
+use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
+
+fn contno(i: &str) -> PResult<u8> {
+    map_res(terminated(digit1, cc('_')), |val: &str| val.parse())(i)
+}
+
+fn header<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, u8> {
+    terminated(contno, terminated(tag(key), cc('|')))
+}
+
+fn remainder(i: &str) -> PResult<&str> {
+    terminated(not_line_ending, line_ending)(i)
+}
+
+fn val<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, &'a str> {
+    delimited(header(key), not_line_ending, line_ending)
+}
+
+pub fn kal(i: &str) -> PResult<Response> {
+    value(Response::Keepalive, terminated(header("KAL"), remainder))(i)
+}
+
+pub fn dataprint(i: &str) -> PResult<bool> {
+    map(
+        delimited(header("DATAPRINT"), one_of("01"), line_ending),
+        |c| match c {
+            '0' => false,
+            _ => true,
+        },
+    )(i)
+}
+
+pub fn date(i: &str) -> PResult<String> {
+    map(
+        delimited(
+            header("DATE"),
+            recognize(many1(one_of("0123456789."))),
+            line_ending,
+        ),
+        |s| String::from(s),
+    )(i)
+}
+
+pub fn time(i: &str) -> PResult<String> {
+    map(
+        delimited(
+            header("TIME"),
+            recognize(many1(one_of("0123456789:"))),
+            line_ending,
+        ),
+        |s| String::from(s),
+    )(i)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CSI {
+    pub date: String,
+    pub time: String,
+    pub artno: String,
+    pub serno: String,
+    pub fw: String,
+    pub hw: String,
+    pub contno: u8,
+}
+
+pub fn csi(i: &str) -> PResult<CSI> {
+    map(
+        tuple((
+            val("CSI"),
+            val("DATE"),
+            val("TIME"),
+            val("ARTNO"),
+            val("SERNO"),
+            val("FW"),
+            val("HW"),
+            delimited(header("CONTNO"), digit1, line_ending),
+        )),
+        |(_csi, date, time, artno, serno, fw, hw, contno)| CSI {
+            date: String::from(date),
+            time: String::from(time),
+            artno: String::from(artno),
+            serno: String::from(serno),
+            fw: String::from(fw),
+            hw: String::from(hw),
+            contno: contno.parse().unwrap(),
+        },
+    )(i)
+}
+
+fn identifier(i: &str) -> PResult<&str> {
+    recognize(many1(alt((alphanumeric1, tag("_")))))(i)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct List3Item {
     busid: String,
@@ -69,59 +169,8 @@ pub struct List3Item {
     name: Option<String>,
 }
 
-use nom::branch::alt;
-use nom::bytes::complete::tag;
-use nom::character::complete::not_line_ending as till_nl;
-use nom::character::streaming::{
-    alphanumeric0, alphanumeric1, anychar, char as cc, digit1, line_ending, none_of,
-    not_line_ending,
-};
-use nom::combinator::{all_consuming, map, map_res, not, opt, peek, recognize, value};
-use nom::error::{Error as NomError, ErrorKind, ParseError};
-use nom::multi::{many0, many1, many_m_n};
-use nom::sequence::{preceded, separated_pair, terminated, tuple};
-
-fn contno(i: &str) -> PResult<u8> {
-    map_res(terminated(digit1, cc('_')), |val: &str| val.parse::<u8>())(i)
-}
-
-fn identifier(i: &str) -> PResult<&str> {
-    recognize(many1(alt((alphanumeric1, tag("_")))))(i)
-}
-
-fn statement<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, u8> {
-    terminated(contno, terminated(tag(key), cc('|')))
-}
-
-fn remainder(i: &str) -> PResult<&str> {
-    terminated(not_line_ending, line_ending)(i)
-}
-
-pub fn kal(i: &str) -> PResult<Response> {
-    value(Response::Keepalive, terminated(statement("KAL"), remainder))(i)
-}
-
-pub fn dataprint(i: &str) -> PResult<bool> {
-    let (i, _) = statement("DATAPRINT")(i)?;
-    map_res(remainder, |s: &str| match s {
-        "0" => Ok(false),
-        "1" => Ok(true),
-        _ => Err(NomError::new(s, ErrorKind::ParseTo)),
-    })(i)
-}
-
-// XXX recognize [0-9.]+
-pub fn date(i: &str) -> PResult<String> {
-    map(preceded(statement("DATE"), remainder), |s| s.to_owned())(i)
-}
-
-// XXX recognize [0-9:]+
-pub fn time(i: &str) -> PResult<String> {
-    map(preceded(statement("TIME"), remainder), |s| s.to_owned())(i)
-}
-
 pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
-    let (i, _) = terminated(statement("LST3"), remainder)(i)?;
+    let (i, _) = terminated(header("LST3"), remainder)(i)?;
     let (i, res) = many1(map_res(
         tuple((
             preceded(tuple((tag("LST|"), contno)), alphanumeric1),
@@ -133,11 +182,11 @@ pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
         )),
         |(busid, serial, status, artno, name, _nl)| -> Result<_, Error> {
             Ok(List3Item {
-                busid: busid.to_owned(),
-                serial: serial.to_owned(),
+                busid: String::from(busid),
+                serial: String::from(serial),
                 status: status.parse()?,
-                artno: artno.to_owned(),
-                name: name.map(|n| n.to_owned()),
+                artno: String::from(artno),
+                name: name.map(|n| String::from(n)),
             })
         },
     ))(i)?;
@@ -151,7 +200,7 @@ pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
 //         map(kal, |_| Response::Keepalive),
 //         map(dataprint, |v| Response::Dataprint(v)),
 //         map(lst3, |v| Response::List3(v)),
-//         map(line, |v| Response::Unkown(v.to_owned())),
+//         map(line, |v| Response::Unkown(String::from(v))),
 //     ))(i)
 // }
 

@@ -1,9 +1,8 @@
-use esera_mqtt::{init_controller, Connection};
-
-use chrono::Local;
-
 mod common;
 use common::rexp_session;
+use esera_mqtt::{init_controller, Connection, Status};
+
+use chrono::Local;
 
 #[tokio::test]
 async fn init_sequence() {
@@ -34,9 +33,9 @@ async fn init_sequence() {
         Ok(())
     });
     let mut conn = Connection::new(addr).await.unwrap();
-    let devtree = init_controller(&mut conn).await.unwrap();
-    assert_eq!(devtree.len(), 1);
-    let mut i = devtree[&2].iter();
+    let (contno, bus) = init_controller(&mut conn).await.unwrap();
+    assert_eq!(contno, 2);
+    let mut i = bus.iter();
     assert_eq!(i.next().unwrap().artno, "11340");
-    assert!(i.all(|dev| dev.artno == ""))
+    assert!(i.all(|dev| dev.status == Status::Unconfigured))
 }

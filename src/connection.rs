@@ -1,12 +1,7 @@
-use crate::parser::{PResult, Response, ResponseKind};
+use crate::parser::PResult;
 
-use futures::{Future, FutureExt, SinkExt, Stream, StreamExt};
-use std::collections::VecDeque;
 use std::fmt;
 use std::net::ToSocketAddrs;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::prelude::*;
@@ -76,7 +71,7 @@ impl<C: AsyncRead + Unpin + fmt::Debug> Connection<C> {
     }
 
     /// Waits until the specified response type is found in the stream.
-    pub async fn wait<F, R>(&mut self, parse_fn: F) -> Result<R>
+    pub async fn pick<F, R>(&mut self, parse_fn: F) -> Result<R>
     where
         for<'a> F: Fn(&'a str) -> PResult<'a, R>,
     {
@@ -116,13 +111,13 @@ mod test {
     #[tokio::test]
     async fn wait_on_closed_reader_should_fail() {
         let mut c = Connection::from_stream(Cursor::new(""));
-        assert_matches!(c.wait(parser::kal).await, Err(Error::Disconnected));
+        assert_matches!(c.pick(parser::kal).await, Err(Error::Disconnected));
     }
 
     #[tokio::test]
     async fn wait_should_return_match() {
         let mut c = Connection::from_stream(Cursor::new("1_KAL|1\n"));
-        assert!(c.wait(parser::kal).await.is_ok());
+        assert!(c.pick(parser::kal).await.is_ok());
         assert_eq!(c.queue, "");
     }
 
@@ -133,7 +128,7 @@ mod test {
              1_DATE|07.11.20\n\
              1_DATAPRINT|1\n",
         ));
-        assert_eq!(c.wait(parser::date).await.unwrap(), "07.11.20");
+        assert_eq!(c.pick(parser::date).await.unwrap(), "07.11.20");
         assert_eq!(
             c.queue,
             "1_KAL|1\n\

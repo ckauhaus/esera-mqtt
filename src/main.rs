@@ -1,10 +1,7 @@
-#![allow(unused)]
-
 #[macro_use]
 extern crate log;
 
 use anyhow::Result;
-use futures::{self, StreamExt};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -26,7 +23,8 @@ struct Opt {
 async fn main() -> Result<()> {
     env_logger::init();
     let opt = Opt::from_args();
-    let mut conn = Connection::new((&*opt.controller_addr, opt.port)).await?;
+    let mut _conn = Connection::new((&*opt.controller_addr, opt.port)).await?;
+    info!("Connected to controller");
     // loop {
     //     futures::select_biased! {
     //     output = conn.poll() => {
