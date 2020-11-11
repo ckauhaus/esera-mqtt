@@ -1,7 +1,10 @@
-use crate::parser::PResult;
+use crate::parser;
+use crate::{Bus, Device, Status};
 
+use chrono::Local;
 use std::fmt;
 use std::net::ToSocketAddrs;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpStream;
 use tokio::prelude::*;
@@ -46,9 +49,9 @@ impl<C: fmt::Debug> Connection<C> {
 impl<C: AsyncWrite + Unpin + fmt::Debug> Connection<C> {
     pub async fn send_line<S: AsRef<str>>(&mut self, line: S) -> Result<()> {
         let line = line.as_ref();
-        debug!(">>> {}", line);
+        debug!("<<< {}", line);
         self.inner.write(line.as_bytes()).await?;
-        if !line.ends_with("\n") {
+        if !line.ends_with('\n') {
             self.inner.write_u8(b'\n').await?;
         }
         Ok(())
@@ -62,10 +65,10 @@ impl<C: AsyncRead + Unpin + fmt::Debug> Connection<C> {
             return Err(Error::Disconnected);
         }
         let read = String::from_utf8_lossy(&self.buf[..n]);
-        if let &std::borrow::Cow::Owned(_) = &read {
+        if let std::borrow::Cow::Owned(_) = read {
             warn!("Non-UTF8 data read from controller: {:?}", read);
         }
-        debug!("<<< {}", read);
+        debug!(">>> {}", read.trim());
         self.queue.push_str(&read);
         Ok(())
     }
@@ -73,7 +76,8 @@ impl<C: AsyncRead + Unpin + fmt::Debug> Connection<C> {
     /// Waits until the specified response type is found in the stream.
     pub async fn pick<F, R>(&mut self, parse_fn: F) -> Result<R>
     where
-        for<'a> F: Fn(&'a str) -> PResult<'a, R>,
+        R: std::fmt::Debug,
+        for<'a> F: Fn(&'a str) -> parser::PResult<'a, R>,
     {
         loop {
             // Search for a match on each line beginning.
@@ -94,8 +98,60 @@ impl<C: AsyncRead + Unpin + fmt::Debug> Connection<C> {
                 self.queue.replace_range(offset..self.queue.len() - rem, "");
                 return Ok(mtch);
             } else {
+                tokio::time::delay_for(Duration::from_millis(25)).await;
                 self.receive().await?;
             }
+        }
+    }
+}
+
+impl<C: AsyncRead + AsyncWrite + Unpin + fmt::Debug> Connection<C> {
+    pub async fn init_controller(&mut self) -> Result<Bus> {
+        self.send_line("SET,SYS,DATAPRINT,1").await?;
+        self.pick(parser::dataprint).await?;
+        let now = Local::now();
+        self.send_line(format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
+            .await?;
+        self.pick(parser::date).await?;
+        self.send_line(format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))
+            .await?;
+        self.pick(parser::time).await?;
+        self.send_line("SET,SYS,DATATIME,30").await?;
+        self.pick(parser::datatime).await?;
+        self.send_line("GET,SYS,INFO").await?;
+        let csi = self.pick(parser::csi).await?;
+        Ok(Bus::new(
+            csi.contno,
+            Device::new("SYS".into(), csi.serno, Status::Online, csi.artno, None),
+        ))
+    }
+
+    // XXX rewrite into Stream<Self>
+    pub async fn poll(&mut self) -> Result<parser::Response> {
+        loop {
+            if !self.queue.is_empty() {
+                match parser::parse(&self.queue) {
+                    Ok((rem, mtch)) => {
+                        let rem = rem.len();
+                        // cut out match from queue buffer
+                        self.queue.replace_range(..self.queue.len() - rem, "");
+                        return Ok(mtch);
+                    }
+                    Err(nom::Err::Error(e)) => {
+                        warn!("Cannot parse {:?}: {}", self.queue, e);
+                    }
+                    Err(nom::Err::Failure(e)) => {
+                        error!("Failed to parse {:?}: {}", self.queue, e);
+                        self.queue.replace_range(
+                            ..self.queue.find('\n').map(|pos| pos + 1).unwrap_or_default(),
+                            "",
+                        );
+                    }
+                    Err(nom::Err::Incomplete(_)) => (),
+                }
+            }
+            tokio::time::delay_for(Duration::from_millis(25)).await;
+            self.receive().await?;
         }
     }
 }

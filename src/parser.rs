@@ -1,4 +1,5 @@
 #![allow(unused)]
+use crate::Status::{self, *};
 
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -6,44 +7,22 @@ use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum Error {
-    #[error("Unexpected response: {0}")]
-    Unexpected(String),
-    #[error("Invalid data format: {0}")]
-    Invalid(String),
     #[error("Invalid UTF-8 in controller reponse")]
     Utf8(#[from] std::str::Utf8Error),
     #[error("Invalid UTF-8 in controller reponse")]
     FromUtf8(#[from] std::string::FromUtf8Error),
     #[error("Invalid syntax: {0}")]
     Syntax(String),
-    #[error("Line too short (truncated?)")]
-    Incomplete,
     #[error("Invalid status code")]
     Status(#[from] strum::ParseError),
+    #[error("Cannot parse numeric argument")]
+    ParseInt(#[from] std::num::ParseIntError),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 pub type PResult<'i, O> = nom::IResult<&'i str, O, nom::error::VerboseError<&'i str>>;
 
 use strum_macros::{AsRefStr, Display, EnumDiscriminants, EnumString};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString)]
-pub enum Status {
-    #[strum(serialize = "S_0")]
-    Online,
-    #[strum(serialize = "S_1")]
-    Err1,
-    #[strum(serialize = "S_2")]
-    Err2,
-    #[strum(serialize = "S_3")]
-    Err3,
-    #[strum(serialize = "S_5")]
-    Offline,
-    #[strum(serialize = "S_10")]
-    Unconfigured,
-}
-
-use Status::*;
 
 #[derive(Debug, Clone, PartialEq, EnumDiscriminants, AsRefStr)]
 #[strum_discriminants(name(ResponseKind))]
@@ -55,7 +34,8 @@ pub enum Response {
     Date(String),
     Time(String),
     List3(Vec<List3Item>),
-    Unkown(String),
+    CSI(CSI),
+    Devstatus { addr: String, data: u32 },
 }
 
 use nom::branch::alt;
@@ -89,14 +69,28 @@ pub fn kal(i: &str) -> PResult<Response> {
     value(Response::Keepalive, terminated(header("KAL"), remainder))(i)
 }
 
+pub fn evt(i: &str) -> PResult<String> {
+    map(
+        delimited(
+            header("EVT"),
+            recognize(many1(one_of("0123456789:"))),
+            line_ending,
+        ),
+        String::from,
+    )(i)
+}
+
 pub fn dataprint(i: &str) -> PResult<bool> {
     map(
         delimited(header("DATAPRINT"), one_of("01"), line_ending),
-        |c| match c {
-            '0' => false,
-            _ => true,
-        },
+        |c| !matches!(c, '0'),
     )(i)
+}
+
+pub fn datatime(i: &str) -> PResult<u8> {
+    map(delimited(header("DATATIME"), digit1, line_ending), |s| {
+        s.parse().unwrap()
+    })(i)
 }
 
 pub fn date(i: &str) -> PResult<String> {
@@ -106,7 +100,7 @@ pub fn date(i: &str) -> PResult<String> {
             recognize(many1(one_of("0123456789."))),
             line_ending,
         ),
-        |s| String::from(s),
+        String::from,
     )(i)
 }
 
@@ -117,7 +111,7 @@ pub fn time(i: &str) -> PResult<String> {
             recognize(many1(one_of("0123456789:"))),
             line_ending,
         ),
-        |s| String::from(s),
+        String::from,
     )(i)
 }
 
@@ -162,47 +156,65 @@ fn identifier(i: &str) -> PResult<&str> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct List3Item {
-    busid: String,
-    serial: String,
-    status: Status,
-    artno: String,
-    name: Option<String>,
+    pub busid: String,
+    pub serno: String,
+    pub status: Status,
+    pub artno: String,
+    pub name: Option<String>,
 }
 
 pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
     let (i, _) = terminated(header("LST3"), remainder)(i)?;
-    let (i, res) = many1(map_res(
-        tuple((
-            preceded(tuple((tag("LST|"), contno)), alphanumeric1),
-            preceded(cc('|'), alphanumeric1),
-            preceded(cc('|'), identifier),
-            preceded(cc('|'), alphanumeric1),
-            opt(preceded(cc('|'), not_line_ending)),
-            line_ending,
-        )),
-        |(busid, serial, status, artno, name, _nl)| -> Result<_, Error> {
-            Ok(List3Item {
-                busid: String::from(busid),
-                serial: String::from(serial),
-                status: status.parse()?,
-                artno: String::from(artno),
-                name: name.map(|n| String::from(n)),
-            })
-        },
-    ))(i)?;
-    let _followed_by_non_list = many_m_n(4, 4, anychar)(i)?;
-    Ok((i, res))
+    many_m_n(
+        1,
+        30,
+        map_res(
+            tuple((
+                preceded(tuple((tag("LST|"), contno)), alphanumeric1),
+                preceded(cc('|'), alphanumeric1),
+                preceded(cc('|'), identifier),
+                preceded(cc('|'), alphanumeric1),
+                opt(preceded(cc('|'), not_line_ending)),
+                line_ending,
+            )),
+            |(busid, serno, status, artno, name, _nl)| -> Result<_, Error> {
+                Ok(List3Item {
+                    busid: String::from(busid),
+                    serno: String::from(serno),
+                    status: status.parse()?,
+                    artno: String::from(artno),
+                    name: name
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|n| String::from(n.trim())),
+                })
+            },
+        ),
+    )(i)
 }
 
-// XXX unsure about API
-// pub fn parse(i: &str) -> Result<Response> {
-//     alt((
-//         map(kal, |_| Response::Keepalive),
-//         map(dataprint, |v| Response::Dataprint(v)),
-//         map(lst3, |v| Response::List3(v)),
-//         map(line, |v| Response::Unkown(String::from(v))),
-//     ))(i)
-// }
+pub fn devstatus(i: &str) -> PResult<(String, u32)> {
+    map_res(
+        separated_pair(
+            preceded(contno, recognize(many1(alt((alphanumeric1, tag("_")))))),
+            cc('|'),
+            terminated(digit1, line_ending),
+        ),
+        |(busid, data)| -> Result<(String, u32)> {
+            Ok((String::from(busid), data.parse::<u32>()?))
+        },
+    )(i)
+}
+
+pub fn parse(i: &str) -> PResult<Response> {
+    alt((
+        map(kal, |_| Response::Keepalive),
+        map(evt, |v| Response::Event(v)),
+        map(dataprint, |v| Response::Dataprint(v)),
+        map(csi, |v| Response::CSI(v)),
+        map(lst3, |v| Response::List3(v)),
+        map(devstatus, |(addr, data)| Response::Devstatus { addr, data }),
+    ))(i)
+}
 
 #[cfg(test)]
 mod test {
@@ -254,8 +266,8 @@ LST|1_OWD1|EF000019096A4026|S_0|11150\n";
         let input = "\
 1_LST3|00:02:54\n\
 LST|1_OWD1|EF000019096A4026|S_0|11150\n\
-LST|1_OWD2|4300001982956429|S_0|DS2408\n\
-LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none\n\
+LST|1_OWD2|4300001982956429|S_0|DS2408|K8\n\
+LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
 1_EVT|0:02:55\n";
         let res = lst3(input);
         dbg!(&res);
@@ -266,26 +278,39 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none\n\
             vec![
                 List3Item {
                     busid: "OWD1".into(),
-                    serial: "EF000019096A4026".into(),
+                    serno: "EF000019096A4026".into(),
                     status: Online,
                     artno: "11150".into(),
                     name: None
                 },
                 List3Item {
                     busid: "OWD2".into(),
-                    serial: "4300001982956429".into(),
+                    serno: "4300001982956429".into(),
                     status: Online,
                     artno: "DS2408".into(),
-                    name: None
+                    name: Some("K8".into())
                 },
                 List3Item {
                     busid: "OWD4".into(),
-                    serial: "FFFFFFFFFFFFFFFF".into(),
+                    serno: "FFFFFFFFFFFFFFFF".into(),
                     status: Unconfigured,
                     artno: "none".into(),
                     name: None
                 },
             ]
         );
+    }
+
+    #[test]
+    fn parse_devstatus() {
+        let (rem, mtch) = devstatus("1_OWD12_3|2\n").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(mtch, ("OWD12_3".into(), 2));
+        let (rem, mtch) = devstatus("1_OWD14_4|10000100\n").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(mtch, ("OWD14_4".into(), 10000100));
+        let (rem, mtch) = devstatus("2_SYS3|500\n").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(mtch, ("SYS3".into(), 500));
     }
 }

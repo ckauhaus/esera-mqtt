@@ -13,11 +13,14 @@ futures = "0.3"
 lazy_static = "1.4.0"
 log = "0.4.11"
 structopt = "0.3.17"
-tokio = { version = "0.3", features = ["full"] }
+tokio = { version = "0.2", features = ["full"] }
 thiserror = "1.0.21"
 nom = "6.0.0"
 strum = "0.19.5"
 strum_macros = "0.19.4"
+bitflags = "1.2.1"
+rumqttc = "0.2.0"
+async-channel = "1.5.1"
 
 [dev-dependencies]
 assert_matches = "1.4.0"
