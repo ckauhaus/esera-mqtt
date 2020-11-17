@@ -7,6 +7,6 @@ mod parser;
 extern crate log;
 
 pub use bus::Bus;
-pub use connection::Connection;
-pub use device::{Device, Status};
+pub use connection::{pick, Connection, Controller};
+pub use device::{Device, Dio, Status};
 pub use parser::Response;

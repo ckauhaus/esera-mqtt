@@ -4,8 +4,9 @@ extern crate log;
 use anyhow::Result;
 use structopt::StructOpt;
 
-use esera_mqtt::{Connection, Response};
+use esera_mqtt::{Bus, Connection, Response};
 use rumqttc::{AsyncClient, MqttOptions};
+use std::time::Duration;
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -38,19 +39,27 @@ async fn main() -> Result<()> {
         _ => &mut mqtt_opt,
     };
     let (mqtt, mut mqtt_loop) = AsyncClient::new(mqtt_opt, 100);
-    let mut bus = conn.init_controller().await?;
-    bus.scan(&mut conn).await?;
-    debug!("bus: {:#?}", bus);
+    let mut bus = Bus::init(&mut conn).await?;
+    let init_msgs = bus.scan(&mut conn).await?;
+    debug!("devices on bus: {:#?}", bus);
     tokio::pin!(conn);
+    let timer = tokio::time::interval(Duration::from_secs(300));
+    tokio::pin!(timer);
     loop {
         tokio::select! {
-            item = conn.poll() => match item {
+            item = conn.next() => match item {
                 Ok(Response::Devstatus { ref addr, data }) => {
                     bus.handle_devstatus(addr, data, &mqtt).await?
                 }
+                Ok(Response::Keepalive) => (),
                 _ => info!("=== {:?}", item)
             },
-            evt = mqtt_loop.poll() => debug!("received MQTT message: {:?}", evt)
+            evt = mqtt_loop.poll() => match evt {
+                Ok(msg) => debug!("received MQTT message: {:?}", msg),
+                Err(e) => error!("MQTT error: {}", e)
+            },
+            _ = timer.tick() => bus.publish(init_msgs.clone(), &mqtt).await?
         }
+        tokio::time::delay_for(Duration::from_millis(1)).await
     }
 }

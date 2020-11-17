@@ -1,9 +1,22 @@
+use crate::{parser, pick, Controller};
+
 use bitflags::bitflags;
+use chrono::Local;
+use futures::future::{self, BoxFuture};
 use std::fmt;
 use std::sync::Mutex;
-use strum_macros::{Display, EnumString};
+use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
+use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString)]
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Controller communication: {0}")]
+    Connection(#[from] crate::connection::Error),
+}
+
+type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr)]
 pub enum Status {
     #[strum(serialize = "S_0")]
     Online,
@@ -42,7 +55,7 @@ impl Default for Device {
     }
 }
 
-fn select_model(artno: &str) -> Box<dyn Model + Send> {
+fn select_model(artno: &str, serno: &str) -> Box<dyn Model + Send> {
     match artno {
         "11221" => Box::new(Dimmer1::default()),
         "11228" => Box::new(Switch8_16A::default()),
@@ -50,7 +63,7 @@ fn select_model(artno: &str) -> Box<dyn Model + Send> {
         "11340" => Box::new(Controller2::default()),
         _ => {
             if artno != "none" {
-                warn!("Unknown model: {}", artno);
+                warn!("Unknown model: {} ({})", artno, serno);
             }
             Box::new(Unknown)
         }
@@ -65,7 +78,7 @@ impl Device {
         artno: String,
         name: Option<String>,
     ) -> Self {
-        let model = Mutex::new(select_model(&artno));
+        let model = Mutex::new(select_model(&artno, &serno));
         Self {
             busid,
             serno,
@@ -78,7 +91,7 @@ impl Device {
 
     #[cfg(test)]
     pub fn with_model(busid: &str, artno: &str) -> Self {
-        let model = Mutex::new(select_model(artno));
+        let model = Mutex::new(select_model(artno, "FFFFFFFFFFFFFFFF"));
         Self {
             busid: String::from(busid),
             serno: String::default(),
@@ -97,8 +110,15 @@ impl Device {
         self.model.lock().unwrap().register(&self)
     }
 
-    pub fn handle_devstatus(&self, addr: &str, data: u32) -> Vec<(String, String)> {
-        self.model.lock().unwrap().handle_devstatus(addr, data)
+    pub fn status_update(&self, addr: &str, data: u32) -> Vec<(String, String)> {
+        self.model.lock().unwrap().status_update(addr, data)
+    }
+
+    pub async fn init(
+        &mut self,
+        ctrl: &mut (dyn Controller + Send),
+    ) -> Result<Vec<(String, String)>> {
+        self.model.lock().unwrap().init(ctrl).await
     }
 }
 
@@ -114,16 +134,40 @@ trait Model: fmt::Debug {
 
     fn register(&self, dev: &Device) -> Vec<String>;
 
-    fn handle_devstatus(&mut self, _addr: &str, _data: u32) -> Vec<(String, String)> {
+    fn init<'a>(
+        &'a mut self,
+        _ctrl: &'a mut (dyn Controller + Send),
+    ) -> BoxFuture<'a, Result<Vec<(String, String)>>> {
+        Box::pin(future::ready(Ok(Vec::new())))
+    }
+
+    fn status_update(&mut self, _addr: &str, _data: u32) -> Vec<(String, String)> {
         Vec::default()
     }
 }
 
 fn boolstr<N: Into<u32>>(n: N) -> &'static str {
-    if n.into() == 0 {
-        "0"
-    } else {
-        "1"
+    match n.into() {
+        0 => "0",
+        _ => "1",
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr, IntoStaticStr)]
+pub enum Dio {
+    #[strum(serialize = "0", to_string = "INDEPENDENT+LEVEL")]
+    IndependentLevel,
+    #[strum(serialize = "1", to_string = "INDEPENDENT+EDGE")]
+    IndependentEdge,
+    #[strum(serialize = "2", to_string = "LINKED+LEVEL")]
+    LinkedLevel,
+    #[strum(serialize = "3", to_string = "LINKED+EDGE")]
+    LinkedEdge,
+}
+
+impl Default for Dio {
+    fn default() -> Self {
+        Dio::IndependentLevel
     }
 }
 
@@ -132,6 +176,24 @@ struct Controller2 {
     inputs: u8,
     outputs: u8,
     ana: f32,
+    dio: Dio,
+}
+
+impl Controller2 {
+    async fn _init(&mut self, ctrl: &mut (dyn Controller + Send)) -> Result<Vec<(String, String)>> {
+        let now = Local::now();
+        ctrl.send_line(&format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
+            .await?;
+        pick(ctrl, parser::date).await?;
+        ctrl.send_line(&format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))
+            .await?;
+        pick(ctrl, parser::time).await?;
+        ctrl.send_line("SET,SYS,DATATIME,30").await?;
+        pick(ctrl, parser::datatime).await?;
+        ctrl.send_line("GET,SYS,DIO").await?;
+        self.dio = pick(ctrl, parser::dio).await?;
+        Ok(vec![("SYS/DIO".to_owned(), self.dio.to_string())])
+    }
 }
 
 impl Model for Controller2 {
@@ -139,7 +201,14 @@ impl Model for Controller2 {
         vec!["SYS1_1".into(), "SYS2_1".into(), "SYS3".into()]
     }
 
-    fn handle_devstatus(&mut self, addr: &str, data: u32) -> Vec<(String, String)> {
+    fn init<'a>(
+        &'a mut self,
+        ctrl: &'a mut (dyn Controller + Send),
+    ) -> BoxFuture<'a, Result<Vec<(String, String)>>> {
+        Box::pin(self._init(ctrl))
+    }
+
+    fn status_update(&mut self, addr: &str, data: u32) -> Vec<(String, String)> {
         let mut res = Vec::new();
         match addr {
             "SYS1_1" => {
@@ -174,11 +243,12 @@ impl Model for Controller2 {
 #[cfg(test)]
 mod controller2_test {
     use super::*;
+    use std::convert::AsRef;
 
     #[test]
     fn process_controller_event() {
         assert_eq!(
-            Controller2::default().handle_devstatus("SYS1_1", 9),
+            Controller2::default().status_update("SYS1_1", 9),
             vec![
                 ("SYS/in/1".into(), "1".into()),
                 ("SYS/in/2".into(), "0".into()),
@@ -187,7 +257,7 @@ mod controller2_test {
             ]
         );
         assert_eq!(
-            Controller2::default().handle_devstatus("SYS2_1", 12),
+            Controller2::default().status_update("SYS2_1", 12),
             vec![
                 ("SYS/out/1".into(), "0".into()),
                 ("SYS/out/2".into(), "0".into()),
@@ -197,9 +267,16 @@ mod controller2_test {
             ]
         );
         assert_eq!(
-            Controller2::default().handle_devstatus("SYS3", 526),
+            Controller2::default().status_update("SYS3", 526),
             vec![("SYS/out/6".into(), "5.26".into())]
         );
+    }
+
+    #[test]
+    fn dio_conversions() {
+        assert_eq!("2".parse::<Dio>().unwrap(), Dio::LinkedLevel);
+        assert_eq!("LINKED+LEVEL".parse::<Dio>().unwrap(), Dio::LinkedLevel);
+        assert_eq!(Dio::IndependentEdge.as_ref(), "INDEPENDENT+EDGE");
     }
 }
 

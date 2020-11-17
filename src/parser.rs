@@ -1,4 +1,5 @@
 #![allow(unused)]
+use crate::Dio;
 use crate::Status::{self, *};
 
 use std::convert::TryFrom;
@@ -29,6 +30,7 @@ use strum_macros::{AsRefStr, Display, EnumDiscriminants, EnumString};
 #[strum_discriminants(derive(AsRefStr))]
 pub enum Response {
     Keepalive,
+    Info(String),
     Event(String),
     Dataprint(bool),
     Date(String),
@@ -36,6 +38,7 @@ pub enum Response {
     List3(Vec<List3Item>),
     CSI(CSI),
     Devstatus { addr: String, data: u32 },
+    DIO(Dio),
 }
 
 use nom::branch::alt;
@@ -69,15 +72,16 @@ pub fn kal(i: &str) -> PResult<Response> {
     value(Response::Keepalive, terminated(header("KAL"), remainder))(i)
 }
 
+fn timeval(i: &str) -> PResult<&str> {
+    recognize(many1(one_of("0123456789:")))(i)
+}
+
+pub fn inf(i: &str) -> PResult<String> {
+    map(delimited(header("INF"), timeval, line_ending), String::from)(i)
+}
+
 pub fn evt(i: &str) -> PResult<String> {
-    map(
-        delimited(
-            header("EVT"),
-            recognize(many1(one_of("0123456789:"))),
-            line_ending,
-        ),
-        String::from,
-    )(i)
+    map(delimited(header("EVT"), timeval, line_ending), String::from)(i)
 }
 
 pub fn dataprint(i: &str) -> PResult<bool> {
@@ -106,11 +110,7 @@ pub fn date(i: &str) -> PResult<String> {
 
 pub fn time(i: &str) -> PResult<String> {
     map(
-        delimited(
-            header("TIME"),
-            recognize(many1(one_of("0123456789:"))),
-            line_ending,
-        ),
+        delimited(header("TIME"), timeval, line_ending),
         String::from,
     )(i)
 }
@@ -205,14 +205,23 @@ pub fn devstatus(i: &str) -> PResult<(String, u32)> {
     )(i)
 }
 
+pub fn dio(i: &str) -> PResult<Dio> {
+    map_res(
+        delimited(tuple((contno, tag("DIO"), cc('|'))), digit1, line_ending),
+        |n| n.parse::<Dio>(),
+    )(i)
+}
+
 pub fn parse(i: &str) -> PResult<Response> {
     alt((
         map(kal, |_| Response::Keepalive),
+        map(inf, |v| Response::Info(v)),
         map(evt, |v| Response::Event(v)),
         map(dataprint, |v| Response::Dataprint(v)),
         map(csi, |v| Response::CSI(v)),
         map(lst3, |v| Response::List3(v)),
         map(devstatus, |(addr, data)| Response::Devstatus { addr, data }),
+        map(dio, |mode| Response::DIO(mode)),
     ))(i)
 }
 
@@ -312,5 +321,12 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
         let (rem, mtch) = devstatus("2_SYS3|500\n").unwrap();
         assert!(rem.is_empty());
         assert_eq!(mtch, ("SYS3".into(), 500));
+    }
+
+    #[test]
+    fn parse_dio() {
+        let (rem, mtch) = dio("1_DIO|0\n").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(mtch, Dio::IndependentLevel);
     }
 }

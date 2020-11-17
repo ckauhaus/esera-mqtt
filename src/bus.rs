@@ -1,22 +1,21 @@
 use crate::parser;
-use crate::{Connection, Device};
+use crate::{pick, Controller, Device, Status};
 
 use rumqttc::{AsyncClient, QoS};
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
-use tokio::prelude::*;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("While scanning 1-Wire bus: {0}")]
     Connection(#[from] crate::connection::Error),
-    #[error("Invalid data format while scanning 1-Wire bus {0}: {1}")]
-    Parse(u8, crate::parser::Error),
     #[error("Don't understand bus id {0}")]
     Busid(String),
     #[error("MQTT error")]
     MQTT(#[from] rumqttc::ClientError),
+    #[error("While initializing device {0} ({1}): {2}")]
+    Initialize(String, String, #[source] crate::device::Error),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -29,8 +28,8 @@ fn busid2n(busid: &str) -> Result<usize> {
         .map_err(|_| Error::Busid(busid.into()))
 }
 
-const N: usize = 31;
-type Devices = [Device; N];
+const BUSMAX: usize = 31;
+type Devices = [Device; BUSMAX];
 
 #[derive(Debug, Default)]
 pub struct Bus {
@@ -54,12 +53,27 @@ impl Bus {
         }
     }
 
-    pub async fn scan<C: std::fmt::Debug + Unpin + AsyncRead + AsyncWrite>(
+    pub async fn init<C: Controller + Send>(ctrl: &mut C) -> Result<Self> {
+        ctrl.send_line("SET,SYS,DATAPRINT,1").await?;
+        pick(ctrl, parser::dataprint).await?;
+        ctrl.send_line("GET,SYS,INFO").await?;
+        let csi = pick(ctrl, parser::csi).await?;
+        let ctrl_dev = Device::new("SYS".into(), csi.serno, Status::Online, csi.artno, None);
+        Ok(Self::new(csi.contno, ctrl_dev))
+    }
+
+    pub async fn scan<C: Controller + Send>(
         &mut self,
-        conn: &mut Connection<C>,
-    ) -> Result<()> {
-        conn.send_line("GET,OWB,LISTALL1").await?;
-        for e in conn.pick(parser::lst3).await? {
+        ctrl: &mut C,
+    ) -> Result<Vec<(String, String)>> {
+        info!("Building device list");
+        // always re-initialize the controller
+        let mut msgs = self.devices[0]
+            .init(ctrl)
+            .await
+            .map_err(|e| Error::Initialize("SYS".into(), self.devices[0].serno.clone(), e))?;
+        ctrl.send_line("GET,OWB,LISTALL1").await?;
+        for e in pick(ctrl, parser::lst3).await? {
             let index = busid2n(&e.busid)?;
             let slot = &mut self.devices[index];
             if slot.serno != e.serno {
@@ -73,9 +87,14 @@ impl Bus {
                 for busaddr in slot.register() {
                     self.evt_handlers.insert(busaddr, index);
                 }
+                msgs.extend(
+                    slot.init(ctrl).await.map_err(|e| {
+                        Error::Initialize(slot.busid.clone(), slot.serno.clone(), e)
+                    })?,
+                );
             }
         }
-        Ok(())
+        Ok(msgs)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Device> {
@@ -94,15 +113,21 @@ impl Bus {
         if let Some(i) = self.evt_handlers.get(addr) {
             let dev = &self.devices[*i];
             debug!("{}: handler({:?}, {})", addr, dev, data);
-            for (topic, value) in dev.handle_devstatus(addr, data) {
-                mqtt.publish(
-                    self.fmt_topic(topic),
-                    QoS::AtLeastOnce,
-                    false,
-                    value.into_bytes(),
-                )
-                .await?
-            }
+            self.publish(dev.status_update(addr, data), mqtt).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn publish(&self, msgs: Vec<(String, String)>, mqtt: &AsyncClient) -> Result<()> {
+        // XXX FuturesUnordered
+        for (topic, value) in msgs {
+            mqtt.publish(
+                self.fmt_topic(topic),
+                QoS::AtLeastOnce,
+                false,
+                value.into_bytes(),
+            )
+            .await?
         }
         Ok(())
     }

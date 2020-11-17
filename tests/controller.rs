@@ -11,12 +11,6 @@ async fn init_sequence() {
         r.exp_string("SET,SYS,DATAPRINT,1")?;
         r.send_line("2_DATAPRINT|1")?;
         let now = Local::now();
-        r.exp_string(&format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))?;
-        r.send_line(&format!("2_DATE|{}", now.format("%d.%m.%y")))?;
-        r.exp_string(&format!("SET,SYS,TIME,{}", now.format("%H:%M:")))?;
-        r.send_line(&format!("2_TIME|{}", now.format("%H:%M:%S")))?;
-        r.exp_string("SET,SYS,DATATIME,30")?;
-        r.send_line("2_DATATIME|30")?;
         r.exp_string("GET,SYS,INFO")?;
         r.send_line(&format!(
             "\
@@ -35,7 +29,7 @@ async fn init_sequence() {
         Ok(())
     });
     let mut conn = Connection::new(endpoint).await.unwrap();
-    let bus = conn.init_controller().await.unwrap();
+    let bus = Bus::init(&mut conn).await.unwrap();
     assert_eq!(bus.contno, 2);
     dbg!(&bus);
 
