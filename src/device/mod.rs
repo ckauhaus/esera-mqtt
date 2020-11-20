@@ -21,22 +21,6 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr)]
-pub enum Status {
-    #[strum(serialize = "S_0")]
-    Online,
-    #[strum(serialize = "S_1")]
-    Err1,
-    #[strum(serialize = "S_2")]
-    Err2,
-    #[strum(serialize = "S_3")]
-    Err3,
-    #[strum(serialize = "S_5")]
-    Offline,
-    #[strum(serialize = "S_10")]
-    Unconfigured,
-}
-
 #[derive(Debug)]
 pub struct Device {
     pub busid: String,
@@ -190,24 +174,6 @@ fn boolstr<N: Into<u32>>(n: N) -> &'static str {
     match n.into() {
         0 => "0",
         _ => "1",
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr, IntoStaticStr)]
-pub enum Dio {
-    #[strum(serialize = "0", to_string = "INDEPENDENT+LEVEL")]
-    IndependentLevel,
-    #[strum(serialize = "1", to_string = "INDEPENDENT+EDGE")]
-    IndependentEdge,
-    #[strum(serialize = "2", to_string = "LINKED+LEVEL")]
-    LinkedLevel,
-    #[strum(serialize = "3", to_string = "LINKED+EDGE")]
-    LinkedEdge,
-}
-
-impl Default for Dio {
-    fn default() -> Self {
-        Dio::IndependentLevel
     }
 }
 

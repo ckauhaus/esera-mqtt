@@ -1,9 +1,4 @@
-#![allow(unused)]
-use crate::Dio;
-use crate::Status::{self, *};
-
-use std::convert::TryFrom;
-use std::str::FromStr;
+use strum_macros::{AsRefStr, Display, EnumDiscriminants, EnumString, IntoStaticStr};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -23,26 +18,8 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 pub type PResult<'i, O> = nom::IResult<&'i str, O, nom::error::VerboseError<&'i str>>;
 
-use strum_macros::{AsRefStr, Display, EnumDiscriminants, EnumString};
-
-#[derive(Debug, Clone, PartialEq, EnumDiscriminants, AsRefStr)]
-#[strum_discriminants(name(ResponseKind))]
-#[strum_discriminants(derive(AsRefStr))]
-pub enum Response {
-    Keepalive,
-    Info(String),
-    Event(String),
-    Dataprint(bool),
-    Date(String),
-    Time(String),
-    List3(Vec<List3Item>),
-    CSI(CSI),
-    Devstatus { addr: String, data: u32 },
-    DIO(Dio),
-}
-
 use nom::branch::alt;
-use nom::bytes::streaming::{tag, take_till1};
+use nom::bytes::streaming::tag;
 use nom::character::streaming::{
     alphanumeric0, alphanumeric1, anychar, char as cc, digit1, line_ending, none_of,
     not_line_ending, one_of,
@@ -68,36 +45,48 @@ fn val<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, &'a str> {
     delimited(header(key), not_line_ending, line_ending)
 }
 
-pub fn kal(i: &str) -> PResult<Response> {
-    value(Response::Keepalive, terminated(header("KAL"), remainder))(i)
+pub type Keepalive = u8;
+
+pub fn kal(i: &str) -> PResult<Keepalive> {
+    terminated(header("KAL"), remainder)(i)
 }
 
 fn timeval(i: &str) -> PResult<&str> {
     recognize(many1(one_of("0123456789:")))(i)
 }
 
-pub fn inf(i: &str) -> PResult<String> {
+pub type Info = String;
+
+pub fn inf(i: &str) -> PResult<Info> {
     map(delimited(header("INF"), timeval, line_ending), String::from)(i)
 }
 
-pub fn evt(i: &str) -> PResult<String> {
+pub type Event = String;
+
+pub fn evt(i: &str) -> PResult<Event> {
     map(delimited(header("EVT"), timeval, line_ending), String::from)(i)
 }
 
-pub fn dataprint(i: &str) -> PResult<bool> {
+pub type Dataprint = bool;
+
+pub fn dataprint(i: &str) -> PResult<Dataprint> {
     map(
         delimited(header("DATAPRINT"), one_of("01"), line_ending),
         |c| !matches!(c, '0'),
     )(i)
 }
 
-pub fn datatime(i: &str) -> PResult<u8> {
+pub type Datatime = u8;
+
+pub fn datatime(i: &str) -> PResult<Datatime> {
     map(delimited(header("DATATIME"), digit1, line_ending), |s| {
         s.parse().unwrap()
     })(i)
 }
 
-pub fn date(i: &str) -> PResult<String> {
+pub type Date = String;
+
+pub fn date(i: &str) -> PResult<Date> {
     map(
         delimited(
             header("DATE"),
@@ -108,7 +97,9 @@ pub fn date(i: &str) -> PResult<String> {
     )(i)
 }
 
-pub fn time(i: &str) -> PResult<String> {
+pub type Time = String;
+
+pub fn time(i: &str) -> PResult<Time> {
     map(
         delimited(header("TIME"), timeval, line_ending),
         String::from,
@@ -154,8 +145,27 @@ fn identifier(i: &str) -> PResult<&str> {
     recognize(many1(alt((alphanumeric1, tag("_")))))(i)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr)]
+pub enum Status {
+    #[strum(serialize = "S_0")]
+    Online,
+    #[strum(serialize = "S_1")]
+    Err1,
+    #[strum(serialize = "S_2")]
+    Err2,
+    #[strum(serialize = "S_3")]
+    Err3,
+    #[strum(serialize = "S_5")]
+    Offline,
+    #[strum(serialize = "S_10")]
+    Unconfigured,
+}
+
+pub type List3 = Vec<List3Item>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct List3Item {
+    pub contno: u8,
     pub busid: String,
     pub serno: String,
     pub status: Status,
@@ -163,22 +173,24 @@ pub struct List3Item {
     pub name: Option<String>,
 }
 
-pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
+pub fn lst3(i: &str) -> PResult<List3> {
     let (i, _) = terminated(header("LST3"), remainder)(i)?;
     many_m_n(
         1,
         30,
         map_res(
             tuple((
-                preceded(tuple((tag("LST|"), contno)), alphanumeric1),
+                preceded(tag("LST|"), contno),
+                alphanumeric1,
                 preceded(cc('|'), alphanumeric1),
                 preceded(cc('|'), identifier),
                 preceded(cc('|'), alphanumeric1),
                 opt(preceded(cc('|'), not_line_ending)),
                 line_ending,
             )),
-            |(busid, serno, status, artno, name, _nl)| -> Result<_, Error> {
+            |(contno, busid, serno, status, artno, name, _nl)| -> Result<_, Error> {
                 Ok(List3Item {
+                    contno,
                     busid: String::from(busid),
                     serno: String::from(serno),
                     status: status.parse()?,
@@ -192,48 +204,98 @@ pub fn lst3(i: &str) -> PResult<Vec<List3Item>> {
     )(i)
 }
 
-pub fn devstatus(i: &str) -> PResult<(String, u32)> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Devstatus {
+    contno: u8,
+    addr: String,
+    val: u32,
+}
+
+pub fn devstatus(i: &str) -> PResult<Devstatus> {
     map_res(
-        separated_pair(
-            preceded(contno, recognize(many1(alt((alphanumeric1, tag("_")))))),
+        tuple((
+            contno,
+            recognize(many1(alt((alphanumeric1, tag("_"))))),
             cc('|'),
             terminated(digit1, line_ending),
-        ),
-        |(busid, data)| -> Result<(String, u32)> {
-            Ok((String::from(busid), data.parse::<u32>()?))
+        )),
+        |(contno, busaddr, _, value)| -> Result<Devstatus> {
+            Ok(Devstatus {
+                contno,
+                addr: busaddr.into(),
+                val: value.parse()?,
+            })
         },
     )(i)
 }
 
-pub fn dio(i: &str) -> PResult<Dio> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr, IntoStaticStr)]
+pub enum DIO {
+    #[strum(serialize = "0", to_string = "INDEPENDENT+LEVEL")]
+    IndependentLevel,
+    #[strum(serialize = "1", to_string = "INDEPENDENT+EDGE")]
+    IndependentEdge,
+    #[strum(serialize = "2", to_string = "LINKED+LEVEL")]
+    LinkedLevel,
+    #[strum(serialize = "3", to_string = "LINKED+EDGE")]
+    LinkedEdge,
+}
+
+impl Default for DIO {
+    fn default() -> Self {
+        DIO::IndependentLevel
+    }
+}
+
+pub fn dio(i: &str) -> PResult<DIO> {
     map_res(
         delimited(tuple((contno, tag("DIO"), cc('|'))), digit1, line_ending),
-        |n| n.parse::<Dio>(),
+        |n| n.parse::<DIO>(),
     )(i)
+}
+
+#[derive(Debug, Clone, PartialEq, EnumDiscriminants)]
+#[strum_discriminants(name(ResponseKind))]
+pub enum Response {
+    Keepalive(Keepalive),
+    Info(Info),
+    Event(Event),
+    Dataprint(Dataprint),
+    Datatime(Datatime),
+    Date(Date),
+    Time(Time),
+    List3(List3),
+    CSI(CSI),
+    Devstatus(Devstatus),
+    DIO(DIO),
 }
 
 pub fn parse(i: &str) -> PResult<Response> {
     alt((
-        map(kal, |_| Response::Keepalive),
+        map(kal, |v| Response::Keepalive(v)),
         map(inf, |v| Response::Info(v)),
         map(evt, |v| Response::Event(v)),
+        map(date, |v| Response::Date(v)),
+        map(time, |v| Response::Time(v)),
         map(dataprint, |v| Response::Dataprint(v)),
+        map(datatime, |v| Response::Datatime(v)),
         map(csi, |v| Response::CSI(v)),
         map(lst3, |v| Response::List3(v)),
-        map(devstatus, |(addr, data)| Response::Devstatus { addr, data }),
-        map(dio, |mode| Response::DIO(mode)),
+        map(devstatus, |v| Response::Devstatus(v)),
+        map(dio, |v| Response::DIO(v)),
     ))(i)
 }
 
 #[cfg(test)]
 mod test {
+    use super::Status::*;
     use super::*;
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn parse_keepalive() {
-        assert_eq!(kal("1_KAL|1\n").unwrap(), ("", Response::Keepalive));
+        assert_eq!(kal("1_KAL|1\n").unwrap(), ("", 1));
     }
 
     #[test]
@@ -286,6 +348,7 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
             mtch,
             vec![
                 List3Item {
+                    contno: 1,
                     busid: "OWD1".into(),
                     serno: "EF000019096A4026".into(),
                     status: Online,
@@ -293,6 +356,7 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
                     name: None
                 },
                 List3Item {
+                    contno: 1,
                     busid: "OWD2".into(),
                     serno: "4300001982956429".into(),
                     status: Online,
@@ -300,6 +364,7 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
                     name: Some("K8".into())
                 },
                 List3Item {
+                    contno: 1,
                     busid: "OWD4".into(),
                     serno: "FFFFFFFFFFFFFFFF".into(),
                     status: Unconfigured,
@@ -314,19 +379,40 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
     fn parse_devstatus() {
         let (rem, mtch) = devstatus("1_OWD12_3|2\n").unwrap();
         assert!(rem.is_empty());
-        assert_eq!(mtch, ("OWD12_3".into(), 2));
+        assert_eq!(
+            mtch,
+            Devstatus {
+                contno: 1,
+                addr: "OWD12_3".into(),
+                val: 2
+            }
+        );
         let (rem, mtch) = devstatus("1_OWD14_4|10000100\n").unwrap();
         assert!(rem.is_empty());
-        assert_eq!(mtch, ("OWD14_4".into(), 10000100));
+        assert_eq!(
+            mtch,
+            Devstatus {
+                contno: 1,
+                addr: "OWD14_4".into(),
+                val: 10000100
+            }
+        );
         let (rem, mtch) = devstatus("2_SYS3|500\n").unwrap();
         assert!(rem.is_empty());
-        assert_eq!(mtch, ("SYS3".into(), 500));
+        assert_eq!(
+            mtch,
+            Devstatus {
+                contno: 2,
+                addr: "SYS3".into(),
+                val: 500
+            }
+        );
     }
 
     #[test]
     fn parse_dio() {
         let (rem, mtch) = dio("1_DIO|0\n").unwrap();
         assert!(rem.is_empty());
-        assert_eq!(mtch, Dio::IndependentLevel);
+        assert_eq!(mtch, DIO::IndependentLevel);
     }
 }

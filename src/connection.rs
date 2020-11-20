@@ -1,198 +1,189 @@
-use crate::parser;
+use crate::parser::{self, Response};
 
-use async_trait::async_trait;
+use std::collections::VecDeque;
 use std::fmt;
+use std::io::prelude::*;
+use std::net::TcpStream;
 use std::net::ToSocketAddrs;
-use std::time::Duration;
 use thiserror::Error;
-use tokio::net::TcpStream;
-use tokio::prelude::*;
-
-const POLLTIME: u64 = 25;
 
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
     Transport(#[from] std::io::Error),
-    #[error("While parsing controller response {1:?}: {0}")]
-    Parse(#[source] crate::parser::Error, String),
-    #[error("Controller connection closed while waiting for response")]
+    #[error("Failed to parse controller reponse: {0}")]
+    Parse(String),
+    #[error("Controller connection lost while waiting for response")]
     Disconnected,
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
-pub struct Connection<S: fmt::Debug + Send> {
-    inner: S,
-    queue: String,
+pub struct ControllerConnection<S>
+where
+    S: Read + Write + fmt::Debug,
+{
+    pub queue: VecDeque<Result<Response>>,
+    partial: String,
+    stream: S,
 }
 
-impl Connection<TcpStream> {
-    pub async fn new<A: ToSocketAddrs>(addr: A) -> std::io::Result<Self> {
+impl ControllerConnection<TcpStream> {
+    pub fn new<A: ToSocketAddrs>(addr: A) -> std::io::Result<Self> {
         let addr: Vec<_> = addr.to_socket_addrs()?.collect();
-        info!("Connecting to {:?}", addr);
-        Ok(Self::from_stream(TcpStream::connect(&*addr).await?))
+        info!("Connecting to 1wire at {:?}", addr);
+        Ok(Self::from_stream(TcpStream::connect(&*addr)?))
     }
 }
 
-impl<C: fmt::Debug + AsyncWrite + AsyncRead + Unpin + Send> Connection<C> {
-    pub fn from_stream(stream: C) -> Self {
+use std::convert::{TryFrom, TryInto};
+
+impl<S: Read + Write + fmt::Debug> ControllerConnection<S> {
+    pub fn from_stream(stream: S) -> Self {
         Self {
-            inner: stream,
-            queue: String::with_capacity(1 << 12),
+            queue: VecDeque::default(),
+            partial: String::with_capacity(1 << 12),
+            stream,
         }
     }
 
-    pub async fn next(&mut self) -> Result<parser::Response> {
-        loop {
-            if !self.buf().is_empty() {
-                match parser::parse(self.buf()) {
-                    Ok((rem, mtch)) => {
-                        let rem = rem.len();
-                        // cut out match from queue buffer
-                        self.cut_range(0, self.buf().len() - rem);
-                        return Ok(mtch);
-                    }
-                    Err(nom::Err::Error(e)) => {
-                        warn!("Cannot parse {:?}: {}", self.buf(), e);
-                    }
-                    Err(nom::Err::Failure(e)) => {
-                        error!("Failed to parse {:?}: {}", self.buf(), e);
-                        let line_ending =
-                            self.buf().find('\n').map(|pos| pos + 1).unwrap_or_default();
-                        self.cut_range(0, line_ending);
-                    }
-                    Err(nom::Err::Incomplete(_)) => (),
-                }
+    /// Moves unparsed data from self.partial into queue as far as the parser allows.
+    fn munch(&mut self) -> Option<Result<Response>> {
+        let res = parser::parse(&self.partial);
+        match res {
+            Ok((rem, resp)) => {
+                self.partial
+                    .replace_range(0..(self.partial.len() - rem.len()), "");
+                Some(Ok(resp))
             }
-            tokio::time::delay_for(Duration::from_millis(POLLTIME)).await;
-            self.fill_buf().await?;
-        }
-    }
-}
-
-#[async_trait]
-pub trait Controller {
-    async fn send_line(&mut self, line: &str) -> Result<()>;
-
-    fn buf(&self) -> &str;
-
-    async fn fill_buf(&mut self) -> Result<()>;
-
-    fn cut_range(&mut self, from: usize, to: usize);
-
-    fn line_beginnings<'a>(&'a self) -> Box<dyn Iterator<Item = usize> + 'a>;
-}
-
-#[async_trait]
-impl<S> Controller for Connection<S>
-where
-    S: AsyncWrite + AsyncRead + Unpin + fmt::Debug + Send,
-{
-    async fn send_line(&mut self, line: &str) -> Result<()> {
-        debug!("<<< {}", line);
-        self.inner.write(line.as_bytes()).await?;
-        if !line.ends_with('\n') {
-            self.inner.write_u8(b'\n').await?;
-        }
-        Ok(())
-    }
-
-    #[inline]
-    fn buf(&self) -> &str {
-        &self.queue
-    }
-
-    // XXX replace self.queue
-    async fn fill_buf(&mut self) -> Result<()> {
-        let mut receive = [0; 1 << 12];
-        let n = self.inner.read(&mut receive).await?;
-        if n == 0 {
-            return Err(Error::Disconnected);
-        }
-        let read = String::from_utf8_lossy(&receive[..n]);
-        if let std::borrow::Cow::Owned(_) = read {
-            warn!("Non-UTF8 data read from controller: {:?}", read);
-        }
-        debug!(">>> {}", read.trim());
-        self.queue.push_str(&read);
-        Ok(())
-    }
-
-    fn cut_range(&mut self, start: usize, end: usize) {
-        self.queue.replace_range(std::ops::Range { start, end }, "");
-    }
-
-    fn line_beginnings<'a>(&'a self) -> Box<dyn Iterator<Item = usize> + 'a> {
-        Box::new(std::iter::once(0).chain(self.queue.match_indices('\n').map(|(n, _)| n + 1)))
-    }
-}
-
-/// Waits until the specified response type is found in the stream.
-pub async fn pick<C, F, R>(ctrl: &mut C, parse_fn: F) -> Result<R>
-where
-    C: Controller + Send + ?Sized,
-    R: std::fmt::Debug + Send,
-    for<'a> F: Fn(&'a str) -> parser::PResult<'a, R> + Send,
-{
-    loop {
-        // Search for a match on each line beginning.
-        // We cannot just iterate over splitlines since a pattern may span multiple lines.
-        let mut found = None;
-        for offset in ctrl.line_beginnings() {
-            if offset < ctrl.buf().len() {
-                if let Ok((rem, mtch)) = parse_fn(&ctrl.buf()[offset..]) {
-                    found = Some((mtch, offset, rem.len()));
-                    break;
-                }
+            Err(nom::Err::Incomplete(_)) => None, // try again later
+            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
+                // delete one line
+                let err = nom::error::convert_error(self.partial.as_ref(), e);
+                self.partial
+                    .replace_range(0..(self.partial.find('\n').map(|p| p + 1).unwrap_or(1)), "");
+                Some(Err(Error::Parse(err)))
             }
         }
-        if let Some((mtch, offset, rem)) = found {
-            ctrl.cut_range(offset, ctrl.buf().len() - rem);
-            return Ok(mtch);
-        } else {
-            tokio::time::delay_for(Duration::from_millis(POLLTIME)).await;
-            ctrl.fill_buf().await?;
-        }
     }
+
+    /// Gets additional data from underlying stream and parses it as fas as possible.
+    /// Returns false if the underlying stream has been closed.
+    fn receive(&mut self) -> Result<bool> {
+        let mut buf = [0; 1 << 12];
+        let len = self.stream.read(&mut buf)?;
+        if len == 0 {
+            return Ok(false);
+        }
+        let read = String::from_utf8_lossy(&buf[0..len]);
+        debug!("<<< {}", read);
+        self.partial.push_str(&read);
+        while let Some(resp) = self.munch() {
+            self.queue.push_back(resp);
+        }
+        Ok(true)
+    }
+}
+
+impl<S> Iterator for ControllerConnection<S>
+where
+    S: Read + Write + fmt::Debug,
+{
+    type Item = Result<Response>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.queue.is_empty() {
+            dbg!(&self.queue);
+            match self.receive() {
+                Ok(true) => (),
+                Ok(false) => return None,
+                Err(e) => return Some(Err(e)), // escalate transport errors quickly
+            }
+        }
+        self.queue.pop_front()
+    }
+}
+
+/// Usage: pick!(&mut conn, RESPONSE_VARIANT) -> Result<RESPONSE_TYPE>
+macro_rules! pick {
+    ($conn:expr, $res:tt) => {{
+        let found = 'outer: loop {
+            for (i, item) in $conn.queue.iter().enumerate() {
+                if let Ok(resp) = item {
+                    if let Response::$res(_) = resp {
+                        break 'outer Ok(i);
+                    }
+                }
+            }
+            match $conn.receive() {
+                Ok(true) => (),
+                Ok(false) => break Err(Error::Disconnected),
+                Err(e) => break Err(e),
+            }
+        };
+        found.map(|i| {
+            if let Response::$res(val) = $conn.queue.remove(i).unwrap().unwrap() {
+                val
+            } else {
+                panic!("internal error: matched item {} disappeared from queue", i)
+            }
+        })
+    }};
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::parser;
 
     use assert_matches::assert_matches;
     use bstr::B;
     use std::io::Cursor;
 
-    #[tokio::test]
-    async fn wait_on_closed_reader_should_fail() {
-        let mut c = Connection::from_stream(Cursor::new(B("").to_vec()));
-        assert_matches!(pick(&mut c, parser::kal).await, Err(Error::Disconnected));
+    #[test]
+    fn get_next_item() {
+        let mut c = ControllerConnection::from_stream(Cursor::new(B("1_EVT|21:02:43\n").to_vec()));
+        assert_matches!(c.next(), Some(Ok(Response::Event(_))));
     }
 
-    #[tokio::test]
-    async fn wait_should_return_match() {
-        let mut c = Connection::from_stream(Cursor::new(B("1_KAL|1\n").to_vec()));
-        assert!(pick(&mut c, parser::kal).await.is_ok());
-        assert_eq!(c.queue, "");
+    #[test]
+    fn wait_on_closed_reader_should_fail() {
+        let mut c = ControllerConnection::from_stream(Cursor::new(B("").to_vec()));
+        assert_matches!(c.next(), None);
     }
 
-    #[tokio::test]
-    async fn wait_should_cut_out_match() {
-        let mut c = Connection::from_stream(Cursor::new(
+    #[test]
+    fn parse_garbage() {
+        let mut c = ControllerConnection::from_stream(Cursor::new(
+            B("<BS>i������J���Ӈ��\n1_INF|21:28:53\n").to_vec(),
+        ));
+        assert_matches!(c.next(), Some(Err(Error::Parse(_))));
+        assert_matches!(c.next(), Some(Ok(Response::Info(_))));
+        assert_matches!(c.next(), None);
+    }
+
+    #[test]
+    fn pick_should_return_match() {
+        let mut c = ControllerConnection::from_stream(Cursor::new(B("1_DATE|20.09.20\n").to_vec()));
+        assert_eq!(pick!(&mut c, Date).unwrap(), "20.09.20".to_string());
+        assert!(c.queue.is_empty());
+    }
+
+    #[test]
+    fn wait_should_cut_out_match() {
+        let mut c = ControllerConnection::from_stream(Cursor::new(
             B("1_KAL|1\n\
-               1_DATE|07.11.20\n\
-               1_DATAPRINT|1\n")
+               1_DATAPRINT|1\n\
+               1_DATE|07.11.20\n")
             .to_vec(),
         ));
-        assert_eq!(pick(&mut c, parser::date).await.unwrap(), "07.11.20");
+        assert_eq!(pick!(&mut c, Dataprint).unwrap(), true);
         assert_eq!(
-            c.queue,
-            "1_KAL|1\n\
-             1_DATAPRINT|1\n"
+            c.queue
+                .into_iter()
+                .map(|r| r.unwrap())
+                .collect::<Vec<Response>>(),
+            vec![Response::Keepalive(1), Response::Date("07.11.20".into())]
         );
     }
 }
