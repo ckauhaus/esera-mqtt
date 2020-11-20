@@ -161,6 +161,12 @@ pub enum Status {
     Unconfigured,
 }
 
+impl Default for Status {
+    fn default() -> Self {
+        Self::Unconfigured
+    }
+}
+
 pub type List3 = Vec<List3Item>;
 
 #[derive(Debug, Clone, PartialEq)]

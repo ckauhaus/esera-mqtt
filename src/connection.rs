@@ -84,6 +84,10 @@ impl<S: Read + Write + fmt::Debug> ControllerConnection<S> {
         }
         Ok(true)
     }
+
+    fn send_line<L: AsRef<str>>(&mut self, line: L) -> Result<()> {
+        Ok(writeln!(self.stream, "{}", line.as_ref())?)
+    }
 }
 
 impl<S> Iterator for ControllerConnection<S>
@@ -106,6 +110,7 @@ where
 }
 
 /// Usage: pick!(&mut conn, RESPONSE_VARIANT) -> Result<RESPONSE_TYPE>
+#[macro_export]
 macro_rules! pick {
     ($conn:expr, $res:tt) => {{
         let found = 'outer: loop {
