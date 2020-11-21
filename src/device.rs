@@ -8,14 +8,13 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Controller communication: {0}")]
-    Connection(#[from] crate::connection::Error),
+    Connection(#[from] crate::controller::Error),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[enum_dispatch]
 pub trait Device {
-    fn new(info: DeviceInfo) -> Self;
-
     /// Device initialization and retained MQTT info. Prepare to be called several times.
     fn setup<S>(&mut self, _conn: &mut ControllerConnection<S>) -> Result<Vec<MqttMsg>>
     where
@@ -74,7 +73,7 @@ impl DeviceInfo {
     }
 }
 
-#[enum_dispatch]
+#[enum_dispatch(Device)]
 pub enum Model {
     Controller2(Controller2),
     // HubIII(HubIII),
@@ -124,19 +123,22 @@ pub struct Controller2 {
     dio: parser::DIO,
 }
 
-impl Device for Controller2 {
+impl Controller2 {
     new!(Controller2);
 }
+
+impl Device for Controller2 {}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Unknown {
     info: DeviceInfo,
 }
 
-impl Device for Unknown {
+impl Unknown {
     new!(Unknown);
 }
 
+impl Device for Unknown {}
 //         ctrl.send_line(&format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
 //             .await?;
 //         pick(ctrl, parser::date).await?;

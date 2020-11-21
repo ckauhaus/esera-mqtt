@@ -1,4 +1,4 @@
-mod connection;
+pub mod controller;
 mod device;
 mod mqtt;
 mod parser;
@@ -6,8 +6,9 @@ mod parser;
 #[macro_use]
 extern crate log;
 
-pub use connection::ControllerConnection;
-pub use mqtt::MqttMsg;
+pub use controller::ControllerConnection;
+pub use device::{Device, DeviceInfo};
+pub use mqtt::{MqttConnection, MqttMsg};
 pub use parser::{Response, Status};
 
 fn bool2str<N: Into<u32>>(n: N) -> &'static str {

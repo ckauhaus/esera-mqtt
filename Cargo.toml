@@ -20,6 +20,7 @@ bitflags = "1.2.1"
 rumqttc = "0.2.0"
 crossbeam = "0.8.0"
 enum_dispatch = "0.3.4"
+parking_lot = "0.11.1"
 
 [dev-dependencies]
 bstr = "0.2.14"

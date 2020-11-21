@@ -67,12 +67,19 @@ pub fn evt(i: &str) -> PResult<Event> {
     map(delimited(header("EVT"), timeval, line_ending), String::from)(i)
 }
 
-pub type Dataprint = bool;
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dataprint {
+    pub contno: u8,
+    pub flag: bool,
+}
 
 pub fn dataprint(i: &str) -> PResult<Dataprint> {
     map(
-        delimited(header("DATAPRINT"), one_of("01"), line_ending),
-        |c| !matches!(c, '0'),
+        tuple((header("DATAPRINT"), terminated(one_of("01"), line_ending))),
+        |(contno, c)| Dataprint {
+            contno,
+            flag: !matches!(c, '0'),
+        },
     )(i)
 }
 
