@@ -1,7 +1,9 @@
 use crossbeam::channel::{self, Receiver, Sender};
-use rumqttc::{ConnectReturnCode, Event, MqttOptions, Packet, QoS};
+use parking_lot::RwLock;
+use rumqttc::{ConnectReturnCode, Event, MqttOptions, Packet, Publish, QoS};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -18,30 +20,74 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub type MqttMsg = (String, String);
-
-pub struct MqttConnection {
-    client: rumqttc::Client,
-    out_tx: Sender<MqttMsg>,
-    out_rx: Receiver<MqttMsg>,
-    subscriptions: HashMap<String, Receiver<MqttMsg>>,
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct MqttMsg {
+    topic: String,
+    payload: String,
 }
 
-impl fmt::Debug for MqttConnection {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        let subs = self
-            .subscriptions
-            .keys()
-            .map(|s| s.as_ref())
-            .collect::<Vec<_>>();
-        write!(f, "MqttConnection({})", subs.join(", "))
+impl MqttMsg {
+    pub fn new<S: Into<String>, P: Into<String>>(topic: S, payload: P) -> Self {
+        Self {
+            topic: topic.into(),
+            payload: payload.into(),
+        }
     }
 }
 
+type Subscriptions = Arc<RwLock<HashMap<String, Sender<Publish>>>>;
+
+pub struct MqttConnection {
+    client: rumqttc::Client,
+    subscriptions: Subscriptions,
+}
+
+fn process_packet(pck: Packet, subs: &Subscriptions) -> bool {
+    match pck {
+        Packet::Publish(msg) => {
+            let subs = subs.read();
+            let topic = msg.topic.clone();
+            for (t, ch) in subs.iter() {
+                if rumqttc::matches(&topic, t) {
+                    if let Err(_) = ch.send(msg) {
+                        warn!("MQTT: subscription channel for {} has been closed", topic)
+                    }
+                    break;
+                }
+            }
+        }
+        Packet::Disconnect => return false,
+        _ => (),
+    }
+    true
+}
+
+fn start_mqtt_loop(host: String, mut conn: rumqttc::Connection, subs: Subscriptions) {
+    std::thread::Builder::new()
+        .name("MQTT reader".into())
+        .spawn(move || {
+            for evt in conn.iter() {
+                match evt {
+                    Ok(Event::Incoming(pck)) => {
+                        debug!("=== {:?}", pck);
+                        if !process_packet(pck, &subs) {
+                            return;
+                        }
+                    }
+                    Ok(Event::Outgoing(_)) => (),
+                    Err(e) => warn!("MQTT: {}", e),
+                }
+            }
+            // underlying transport closed
+            error!("MQTT connection to {} unexpectly lost", host);
+        })
+        .unwrap();
+}
+
 impl MqttConnection {
-    pub fn new(host: &str, opt: MqttOptions) -> Result<(Self, rumqttc::Connection)> {
+    pub fn new(host: &str, opt: MqttOptions) -> Result<Self> {
+        let host = host.to_owned();
         let (client, mut conn) = rumqttc::Client::new(opt, 100);
-        let (out_tx, out_rx) = channel::unbounded();
         let mut success = false;
         for item in conn.iter().take(3) {
             match item {
@@ -56,40 +102,46 @@ impl MqttConnection {
                     "Unexpected response while connecting to MQTT broker: {:?}",
                     other
                 ),
-                Err(e) => return Err(Error::Connect(host.into(), e)),
+                Err(e) => return Err(Error::Connect(host, e)),
             }
         }
         if success {
-            Ok((
-                Self {
-                    client,
-                    out_tx,
-                    out_rx,
-                    subscriptions: HashMap::new(),
-                },
-                conn,
-            ))
+            let subscriptions = Arc::new(RwLock::new(HashMap::new()));
+            start_mqtt_loop(host, conn, subscriptions.clone());
+            Ok(Self {
+                client,
+                subscriptions,
+            })
         } else {
-            Err(Error::Disconnected(host.into()))
+            Err(Error::Disconnected(host))
         }
     }
 
-    pub fn out_tx(&self) -> Sender<MqttMsg> {
-        self.out_tx.clone()
-    }
-
-    pub fn subscribe<S: Into<String> + Clone>(&mut self, topic: S) -> Result<Sender<MqttMsg>> {
+    pub fn subscribe<S: Into<String> + Clone>(&mut self, topic: S) -> Result<Receiver<Publish>> {
         let (tx, rx) = channel::unbounded();
         self.client
             .subscribe(topic.clone(), QoS::AtLeastOnce)
             .map_err(|e| Error::Subscribe(topic.clone().into(), e))?;
-        self.subscriptions.insert(topic.into(), rx);
-        Ok(tx)
+        self.subscriptions.write().insert(topic.into(), tx);
+        Ok(rx)
     }
 
     pub fn send(&mut self, msg: MqttMsg) -> Result<()> {
+        debug!("+++ {}: {}", msg.topic, msg.payload);
         Ok(self
             .client
-            .publish(msg.0, QoS::AtLeastOnce, false, msg.1.as_bytes())?)
+            .publish(msg.topic, QoS::AtLeastOnce, false, msg.payload.as_bytes())?)
+    }
+
+    pub fn disconnect(&mut self) {
+        self.client.disconnect().ok();
+    }
+}
+
+impl fmt::Debug for MqttConnection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        let subscriptions = self.subscriptions.read();
+        let items = subscriptions.keys().map(|s| s.as_ref()).collect::<Vec<_>>();
+        write!(f, "MqttConnection({})", items.join(", "))
     }
 }

@@ -3,9 +3,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum Error {
-    #[error("Invalid UTF-8 in controller reponse")]
+    #[error("Invalid UTF-8 in controller response")]
     Utf8(#[from] std::str::Utf8Error),
-    #[error("Invalid UTF-8 in controller reponse")]
+    #[error("Invalid UTF-8 in controller response")]
     FromUtf8(#[from] std::string::FromUtf8Error),
     #[error("Invalid status code")]
     Status(#[from] strum::ParseError),
@@ -61,9 +61,7 @@ pub fn inf(i: &str) -> PResult<Info> {
 pub type Err = u8;
 
 pub fn err(i: &str) -> PResult<Err> {
-    map_res(delimited(header("ERR"), digit1, line_ending), |v| {
-        v.parse::<u8>()
-    })(i)
+    map_res(delimited(header("ERR"), digit1, line_ending), |v| v.parse())(i)
 }
 
 pub type Event = String;
@@ -74,12 +72,12 @@ pub fn evt(i: &str) -> PResult<Event> {
 
 pub type Rst = char;
 
-pub fn rst(i: &str) -> PResult<Save> {
+pub fn rst(i: &str) -> PResult<Rst> {
     delimited(header("RST"), one_of("01"), line_ending)(i)
 }
 pub type Rdy = char;
 
-pub fn rdy(i: &str) -> PResult<Save> {
+pub fn rdy(i: &str) -> PResult<Rdy> {
     delimited(header("RDY"), one_of("01"), line_ending)(i)
 }
 pub type Save = char;
@@ -91,16 +89,13 @@ pub fn save(i: &str) -> PResult<Save> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dataprint {
     pub contno: u8,
-    pub flag: bool,
+    pub flag: char,
 }
 
 pub fn dataprint(i: &str) -> PResult<Dataprint> {
     map(
         tuple((header("DATAPRINT"), terminated(one_of("01"), line_ending))),
-        |(contno, c)| Dataprint {
-            contno,
-            flag: !matches!(c, '0'),
-        },
+        |(contno, flag)| Dataprint { contno, flag },
     )(i)
 }
 
@@ -134,7 +129,7 @@ pub fn time(i: &str) -> PResult<Time> {
     )(i)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CSI {
     pub date: String,
     pub time: String,
@@ -211,6 +206,13 @@ pub struct DeviceInfo {
     pub name: Option<String>,
 }
 
+impl DeviceInfo {
+    /// Format MQTT message topic relating to this device
+    pub fn topic<S: AsRef<str>>(&self, item: S) -> String {
+        format!("ESERA/{}/{}/{}", self.contno, self.busid, item.as_ref())
+    }
+}
+
 pub fn lst3(i: &str) -> PResult<List3> {
     let (i, contno) = terminated(header("LST3"), remainder)(i)?;
     let head = format!("LST|{}_", contno);
@@ -269,7 +271,7 @@ pub fn devstatus(i: &str) -> PResult<Devstatus> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr, IntoStaticStr)]
-pub enum DIO {
+pub enum DIOStatus {
     #[strum(serialize = "0", to_string = "INDEPENDENT+LEVEL")]
     IndependentLevel,
     #[strum(serialize = "1", to_string = "INDEPENDENT+EDGE")]
@@ -280,16 +282,33 @@ pub enum DIO {
     LinkedEdge,
 }
 
-impl Default for DIO {
+impl Default for DIOStatus {
     fn default() -> Self {
-        DIO::IndependentLevel
+        DIOStatus::IndependentLevel
     }
+}
+
+impl Into<String> for DIOStatus {
+    fn into(self) -> String {
+        self.to_string()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DIO {
+    pub contno: u8,
+    pub status: DIOStatus,
 }
 
 pub fn dio(i: &str) -> PResult<DIO> {
     map_res(
-        delimited(tuple((contno, tag("DIO"), cc('|'))), digit1, line_ending),
-        |n| n.parse::<DIO>(),
+        tuple((contno, delimited(tag("DIO|"), digit1, line_ending))),
+        |(c, n)| -> Result<DIO> {
+            Ok(DIO {
+                contno: c,
+                status: n.parse()?,
+            })
+        },
     )(i)
 }
 
@@ -309,8 +328,8 @@ pub enum Response {
     Time(Time),
     List3(List3),
     CSI(CSI),
-    Devstatus(Devstatus),
     DIO(DIO),
+    Devstatus(Devstatus),
 }
 
 pub fn parse(i: &str) -> PResult<Response> {
@@ -328,8 +347,8 @@ pub fn parse(i: &str) -> PResult<Response> {
         map(time, |v| Response::Time(v)),
         map(lst3, |v| Response::List3(v)),
         map(csi, |v| Response::CSI(v)),
-        map(devstatus, |v| Response::Devstatus(v)),
         map(dio, |v| Response::DIO(v)),
+        map(devstatus, |v| Response::Devstatus(v)),
     ))(i)
 }
 
@@ -358,7 +377,7 @@ mod test {
                 "",
                 Dataprint {
                     contno: 1,
-                    flag: true
+                    flag: '1'
                 }
             )
         );
@@ -470,8 +489,16 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
 
     #[test]
     fn parse_dio() {
-        let (rem, mtch) = dio("1_DIO|0\n").unwrap();
+        let (rem, mtch) = dio("3_DIO|1\n").unwrap();
         assert!(rem.is_empty());
-        assert_eq!(mtch, DIO::IndependentLevel);
+        assert_eq!(
+            mtch,
+            DIO {
+                contno: 3,
+                status: DIOStatus::IndependentEdge
+            }
+        );
+        let (_, mtch) = parse("1_DIO|0\n").unwrap();
+        assert_matches!(mtch, Response::DIO(_));
     }
 }

@@ -27,18 +27,7 @@ struct Opt {
     mqtt_cred: String,
 }
 
-fn main() -> Result<()> {
-    env_logger::init();
-    let opt = Opt::from_args();
-    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
-    let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
-    let mut parts = opt.mqtt_cred.splitn(2, ':');
-    match (parts.next(), parts.next()) {
-        (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
-        (Some(user), None) => mqtt_opt.set_credentials(user, ""),
-        _ => &mut mqtt_opt,
-    };
-    let (mut mqtt, mqtt_conn) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
+fn run(mqtt: &mut MqttConnection, opt: Opt) -> Result<()> {
     let mut universe = Universe::default();
     let ctrl_chan = controller::create(&opt.controllers, opt.default_port)
         .context("Controller initialization failed")?;
@@ -52,9 +41,12 @@ fn main() -> Result<()> {
         let i = oper.index();
         match oper.recv(&ctrl_chan[i].1) {
             Ok(Ok(resp)) => {
-                debug!("response={:?}", resp);
-                for msg in universe.handle_1wire(resp)? {
+                let res = universe.handle_1wire(resp)?;
+                for msg in res.mqtt {
                     mqtt.send(msg)?;
+                }
+                for cmd in res.ow {
+                    &ctrl_chan[i].0.send(cmd)?;
                 }
             }
             Ok(Err(e)) => error!("{}", e),
@@ -62,4 +54,32 @@ fn main() -> Result<()> {
         };
     }
     Ok(())
+}
+
+fn main() {
+    env_logger::init();
+    let opt = Opt::from_args();
+    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
+    let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
+    let mut parts = opt.mqtt_cred.splitn(2, ':');
+    match (parts.next(), parts.next()) {
+        (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
+        (Some(user), None) => mqtt_opt.set_credentials(user, ""),
+        _ => &mut mqtt_opt,
+    };
+    let mut mqtt = match MqttConnection::new(&opt.mqtt_host, mqtt_opt) {
+        Ok(mqtt) => mqtt,
+        Err(e) => {
+            error!("Failed to connect to MQTT broker: {}", e);
+            std::process::exit(2);
+        }
+    };
+    let exitcode = if let Err(e) = run(&mut mqtt, opt) {
+        error!("FATAL: {}", e);
+        1
+    } else {
+        0
+    };
+    mqtt.disconnect();
+    std::process::exit(exitcode);
 }

@@ -20,7 +20,7 @@ use thiserror::Error;
 pub enum Error {
     #[error(transparent)]
     Transport(#[from] std::io::Error),
-    #[error("Failed to parse controller reponse: {0}")]
+    #[error("Failed to parse controller response: {0}")]
     Parse(String),
     #[error("Controller connection lost while waiting for response")]
     Disconnected,
@@ -59,8 +59,9 @@ impl ControllerConnection<TcpStream> {
     }
 
     fn setup(&self) -> Result<()> {
-        self.send_line(format!("SET,SYS,RST,1"))?;
-        pick!(self, Rdy)?;
+        // self.send_line(format!("SET,SYS,RST,1"))?;
+        // pick!(self, Rst)?;
+        // pick!(self, Rdy)?;
         self.send_line(format!("SET,SYS,DATAPRINT,1"))?;
         pick!(self, Dataprint)?;
         let now = Local::now();
@@ -347,7 +348,7 @@ mod test {
                1_DATE|07.11.20\n")
             .to_vec(),
         ));
-        assert_eq!(pick!(&mut c, Dataprint).unwrap().flag, true);
+        assert_eq!(pick!(&mut c, Dataprint).unwrap().flag, '1');
         assert_eq!(
             c.queue
                 .into_inner()

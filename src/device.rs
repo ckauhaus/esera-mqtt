@@ -1,31 +1,34 @@
-use crate::{parser, DeviceInfo, MqttMsg, Response, Status};
+use crate::{parser, DeviceInfo, MqttMsg, Response, TwoWay};
 
-use crossbeam::channel::Sender;
 use enum_dispatch::enum_dispatch;
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("Controller communication: {0}")]
-    Connection(#[from] crate::controller::Error),
-}
-
-type Result<T, E = Error> = std::result::Result<T, E>;
+type Result<T, E = crate::bus::Error> = std::result::Result<T, E>;
 
 #[enum_dispatch]
 pub trait Device {
-    /// Device initialization and retained MQTT info. Prepare to be called several times.
-    fn setup<S>(&mut self, _conn: Sender<String>) {}
+    fn info(&self) -> &DeviceInfo;
 
-    fn handle_1wire(&mut self, _resp: Response) -> Result<Vec<MqttMsg>> {
-        Ok(Vec::default())
+    fn name(&self) -> &'static str;
+
+    fn configured(&self) -> bool {
+        // overridden in [`Model::Unknown`]
+        true
+    }
+
+    /// Issue initialization commands sent to the device. Possible answers must be handled via
+    /// [`handle_1wire`].
+    fn init(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn handle_1wire(&mut self, _resp: Response) -> Result<TwoWay> {
+        Ok(TwoWay::default())
     }
 
     fn handle_mqtt<S>(&self, _msg: MqttMsg) -> Result<Vec<String>> {
         Ok(Vec::default())
     }
-
-    fn display(&self) -> String;
 }
 
 #[enum_dispatch(Device)]
@@ -39,7 +42,7 @@ pub enum Model {
 }
 
 impl Model {
-    fn select(info: DeviceInfo) -> Self {
+    pub fn select(info: DeviceInfo) -> Self {
         let a = info.artno.clone();
         match &*a {
             "11340" => Self::Controller2(Controller2::new(info)),
@@ -57,6 +60,29 @@ impl Default for Model {
     }
 }
 
+impl fmt::Display for Model {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        let info = self.info();
+        write!(
+            f,
+            "[{}] {} {} ({}) S/N {} ",
+            info.contno,
+            info.busid,
+            self.name(),
+            info.artno,
+            info.serno
+        )?;
+        write!(
+            f,
+            "{}",
+            match info.name {
+                Some(ref n) => n,
+                None => "-",
+            }
+        )
+    }
+}
+
 macro_rules! new {
     ($type:ty) => {
         fn new(info: DeviceInfo) -> Self {
@@ -68,13 +94,25 @@ macro_rules! new {
     };
 }
 
+macro_rules! std_methods {
+    ($type:ty) => {
+        fn info(&self) -> &DeviceInfo {
+            &self.info
+        }
+
+        fn name(&self) -> &'static str {
+            stringify!($type)
+        }
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Controller2 {
     info: DeviceInfo,
     inputs: u8,
     outputs: u8,
     ana: f32,
-    dio: parser::DIO,
+    dio: parser::DIOStatus,
 }
 
 impl Controller2 {
@@ -82,11 +120,27 @@ impl Controller2 {
 }
 
 impl Device for Controller2 {
-    fn display<'a>(&'a self) -> String {
-        format!(
-            "Controller2 ({}) @ {}/{}",
-            self.info.artno, self.info.contno, self.info.serno
-        )
+    std_methods!(Controller2);
+
+    fn init(&self) -> Vec<String> {
+        vec!["GET,SYS,DIO".into()]
+    }
+
+    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
+        Ok(match resp {
+            Response::DIO(dio) => {
+                debug!("[{}] DIO status: {}", dio.contno, dio.status);
+                self.dio = dio.status;
+                TwoWay::mqtt(&self.info, "DIO", dio.status)
+            }
+            _ => {
+                warn!(
+                    "[{}] Controller2: don't know how to handle {:?}",
+                    self.info.contno, resp
+                );
+                TwoWay::default()
+            }
+        })
     }
 }
 
@@ -100,21 +154,9 @@ impl Unknown {
 }
 
 impl Device for Unknown {
-    fn display<'a>(&'a self) -> String {
-        format!(
-            "Unknown device ({}) @ {}/{}",
-            self.info.artno, self.info.contno, self.info.serno
-        )
+    std_methods!(Unknown);
+
+    fn configured(&self) -> bool {
+        false
     }
 }
-//         ctrl.send_line(&format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
-//             .await?;
-//         pick(ctrl, parser::date).await?;
-//         ctrl.send_line(&format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))
-//             .await?;
-//         pick(ctrl, parser::time).await?;
-//         ctrl.send_line("SET,SYS,DATATIME,30").await?;
-//         pick(ctrl, parser::datatime).await?;
-//         ctrl.send_line("GET,SYS,DIO").await?;
-//         self.dio = pick(ctrl, parser::dio).await?;
-//         Ok(vec![("SYS/DIO".to_owned(), self.dio.to_string())])
