@@ -1,12 +1,12 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::Result;
-use crossbeam::channel::{self, Receiver, Sender};
+use anyhow::{Context, Result};
+use crossbeam::channel;
 use rumqttc::MqttOptions;
 use structopt::StructOpt;
 
-use esera_mqtt::{controller, MqttConnection, Response};
+use esera_mqtt::{controller, MqttConnection, Universe};
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -30,7 +30,7 @@ struct Opt {
 fn main() -> Result<()> {
     env_logger::init();
     let opt = Opt::from_args();
-    info!("Connecting to MQTT broker");
+    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
     let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
     let mut parts = opt.mqtt_cred.splitn(2, ':');
     match (parts.next(), parts.next()) {
@@ -38,17 +38,25 @@ fn main() -> Result<()> {
         (Some(user), None) => mqtt_opt.set_credentials(user, ""),
         _ => &mut mqtt_opt,
     };
-    let (mqtt, mqtt_conn) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
-    let ctrl_chan = controller::create(&opt.controllers, opt.default_port)?;
+    let (mut mqtt, mqtt_conn) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
+    let mut universe = Universe::default();
+    let ctrl_chan = controller::create(&opt.controllers, opt.default_port)
+        .context("Controller initialization failed")?;
     let mut sel = channel::Select::new();
     for (_, down) in &ctrl_chan {
         sel.recv(down);
     }
+    debug!("Entering main event loop");
     loop {
         let oper = sel.select();
         let i = oper.index();
         match oper.recv(&ctrl_chan[i].1) {
-            Ok(Ok(resp)) => debug!("{:?}", resp),
+            Ok(Ok(resp)) => {
+                debug!("response={:?}", resp);
+                for msg in universe.handle_1wire(resp)? {
+                    mqtt.send(msg)?;
+                }
+            }
             Ok(Err(e)) => error!("{}", e),
             Err(_) => break, // channel closed
         };

@@ -24,6 +24,8 @@ pub enum Error {
     Parse(String),
     #[error("Controller connection lost while waiting for response")]
     Disconnected,
+    #[error("Controller communication protocol error ({0})")]
+    Controller(u8),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -40,8 +42,11 @@ where
 }
 
 impl ControllerConnection<TcpStream> {
-    pub fn new<A: ToSocketAddrs>(addr: A) -> Result<Self> {
-        let mut c = Self::from_stream(TcpStream::connect(&addr)?);
+    pub fn new<A: ToSocketAddrs + fmt::Debug>(addr: A) -> Result<Self> {
+        info!("Connecting to 1-Wire controller at {:?}", addr);
+        let conn = TcpStream::connect(&addr)?;
+        conn.set_nodelay(false)?;
+        let c = Self::from_stream(conn);
         c.setup()?;
         Ok(c)
     }
@@ -53,10 +58,11 @@ impl ControllerConnection<TcpStream> {
         self.setup()
     }
 
-    fn setup(&mut self) -> Result<()> {
-        self.send_line("SET,SYS,DATAPRINT,1")?;
-        let dp = pick!(self, Dataprint)?;
-        self.contno = dp.contno;
+    fn setup(&self) -> Result<()> {
+        self.send_line(format!("SET,SYS,RST,1"))?;
+        pick!(self, Rdy)?;
+        self.send_line(format!("SET,SYS,DATAPRINT,1"))?;
+        pick!(self, Dataprint)?;
         let now = Local::now();
         self.send_line(format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))?;
         pick!(self, Date)?;
@@ -64,13 +70,15 @@ impl ControllerConnection<TcpStream> {
         pick!(self, Time)?;
         self.send_line("SET,SYS,DATATIME,20")?;
         pick!(self, Datatime)?;
+        self.send_line("SET,SYS,SAVE")?;
+        pick!(self, Save)?;
         Ok(())
     }
 }
 
 #[cfg(test)]
 impl ControllerConnection<Cursor<Vec<u8>>> {
-    fn new() -> Self {
+    fn dummy() -> Self {
         Self::from_stream(Cursor::new(Vec::new()))
     }
 
@@ -111,9 +119,11 @@ where
     }
 
     /// Writes a single line to the underlaying stream. Newline will be appended.
-    pub fn send_line<L: AsRef<str>>(&self, line: L) -> Result<()> {
-        debug!("[{}] >>> {}", self.contno, line.as_ref().trim());
-        Ok(writeln!(self.stream.lock(), "{}", line.as_ref())?)
+    pub fn send_line<L: Into<String>>(&self, line: L) -> Result<(), std::io::Error> {
+        let mut line = line.into();
+        line.push_str("\r\n");
+        debug!("[{}] >>> {}", self.contno, line.trim());
+        self.stream.lock().write_all(line.as_bytes())
     }
 
     /// Gets additional data from underlying stream and parses it as fas as possible.
@@ -158,6 +168,40 @@ where
         self.send_line("GET,OWB,LISTALL1")?;
         pick!(&self, List3)
     }
+}
+
+/// Usage: pick!(&mut conn, RESPONSE_VARIANT) -> Result<RESPONSE_TYPE>
+#[macro_export]
+macro_rules! pick {
+    ($conn:expr, $res:tt) => {
+        (|| {
+            let found = 'outer: loop {
+                for (i, item) in $conn.queue.lock().iter().enumerate() {
+                    if let Ok(resp) = item {
+                        match resp {
+                            Response::$res(_) => break 'outer Ok(i),
+                            Response::Err(e) => return Err(Error::Controller(*e)),
+                            _ => (),
+                        }
+                    }
+                }
+                // item not already present in queue, wait for more data
+                std::thread::sleep(Duration::from_millis(25));
+                match $conn.receive() {
+                    Ok(true) => (),
+                    Ok(false) => break Err(Error::Disconnected),
+                    Err(e) => break Err(e),
+                }
+            };
+            found.map(|i| {
+                if let Response::$res(val) = $conn.queue.lock().remove(i).unwrap().unwrap() {
+                    val
+                } else {
+                    panic!("internal error: matched item {} disappeared from queue", i)
+                }
+            })
+        })()
+    };
 }
 
 impl<S> ControllerConnection<S>
@@ -258,38 +302,6 @@ pub fn create(
         .collect()
 }
 
-/// Usage: pick!(&mut conn, RESPONSE_VARIANT) -> Result<RESPONSE_TYPE>
-#[macro_export]
-macro_rules! pick {
-    ($conn:expr, $res:tt) => {
-        (|| {
-            let found = 'outer: loop {
-                for (i, item) in $conn.queue.lock().iter().enumerate() {
-                    if let Ok(resp) = item {
-                        if let Response::$res(_) = resp {
-                            break 'outer Ok(i);
-                        }
-                    }
-                }
-                // item not already present in queue, wait for more data
-                std::thread::sleep(Duration::from_millis(25));
-                match $conn.receive() {
-                    Ok(true) => (),
-                    Ok(false) => break Err(Error::Disconnected),
-                    Err(e) => break Err(e),
-                }
-            };
-            found.map(|i| {
-                if let Response::$res(val) = $conn.queue.lock().remove(i).unwrap().unwrap() {
-                    val
-                } else {
-                    panic!("internal error: matched item {} disappeared from queue", i)
-                }
-            })
-        })()
-    };
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -324,7 +336,7 @@ mod test {
     fn pick_should_return_match() {
         let mut c = ControllerConnection::from_stream(Cursor::new(B("1_DATE|20.09.20\n").to_vec()));
         assert_eq!(pick!(&mut c, Date).unwrap(), "20.09.20".to_string());
-        assert!(c.queue.is_empty());
+        assert!(c.queue.lock().is_empty());
     }
 
     #[test]
@@ -335,9 +347,10 @@ mod test {
                1_DATE|07.11.20\n")
             .to_vec(),
         ));
-        assert_eq!(pick!(&mut c, Dataprint).unwrap(), true);
+        assert_eq!(pick!(&mut c, Dataprint).unwrap().flag, true);
         assert_eq!(
             c.queue
+                .into_inner()
                 .into_iter()
                 .map(|r| r.unwrap())
                 .collect::<Vec<Response>>(),

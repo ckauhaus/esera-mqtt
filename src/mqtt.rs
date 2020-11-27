@@ -12,6 +12,8 @@ pub enum Error {
     Disconnected(String),
     #[error("Failed to subscribe topic {0}: {1}")]
     Subscribe(String, #[source] rumqttc::ClientError),
+    #[error("Failed to publish MQTT message: {0}")]
+    Send(#[from] rumqttc::ClientError),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -83,5 +85,11 @@ impl MqttConnection {
             .map_err(|e| Error::Subscribe(topic.clone().into(), e))?;
         self.subscriptions.insert(topic.into(), rx);
         Ok(tx)
+    }
+
+    pub fn send(&mut self, msg: MqttMsg) -> Result<()> {
+        Ok(self
+            .client
+            .publish(msg.0, QoS::AtLeastOnce, false, msg.1.as_bytes())?)
     }
 }

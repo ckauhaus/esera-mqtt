@@ -7,8 +7,6 @@ pub enum Error {
     Utf8(#[from] std::str::Utf8Error),
     #[error("Invalid UTF-8 in controller reponse")]
     FromUtf8(#[from] std::string::FromUtf8Error),
-    #[error("Invalid syntax: {0}")]
-    Syntax(String),
     #[error("Invalid status code")]
     Status(#[from] strum::ParseError),
     #[error("Cannot parse numeric argument")]
@@ -21,13 +19,11 @@ pub type PResult<'i, O> = nom::IResult<&'i str, O, nom::error::VerboseError<&'i 
 use nom::branch::alt;
 use nom::bytes::streaming::tag;
 use nom::character::streaming::{
-    alphanumeric0, alphanumeric1, anychar, char as cc, digit1, line_ending, none_of,
-    not_line_ending, one_of,
+    alphanumeric1, char as cc, digit1, line_ending, not_line_ending, one_of,
 };
-use nom::combinator::{all_consuming, map, map_res, not, opt, peek, recognize, value};
-use nom::error::{Error as NomError, ErrorKind, ParseError};
-use nom::multi::{many0, many1, many_m_n};
-use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
+use nom::combinator::{map, map_res, opt, recognize};
+use nom::multi::{many1, many_m_n};
+use nom::sequence::{delimited, preceded, terminated, tuple};
 
 fn contno(i: &str) -> PResult<u8> {
     map_res(terminated(digit1, cc('_')), |val: &str| val.parse())(i)
@@ -61,10 +57,35 @@ pub fn inf(i: &str) -> PResult<Info> {
     map(delimited(header("INF"), timeval, line_ending), String::from)(i)
 }
 
+/// Controller error. The number denotes the erronous command component
+pub type Err = u8;
+
+pub fn err(i: &str) -> PResult<Err> {
+    map_res(delimited(header("ERR"), digit1, line_ending), |v| {
+        v.parse::<u8>()
+    })(i)
+}
+
 pub type Event = String;
 
 pub fn evt(i: &str) -> PResult<Event> {
     map(delimited(header("EVT"), timeval, line_ending), String::from)(i)
+}
+
+pub type Rst = char;
+
+pub fn rst(i: &str) -> PResult<Save> {
+    delimited(header("RST"), one_of("01"), line_ending)(i)
+}
+pub type Rdy = char;
+
+pub fn rdy(i: &str) -> PResult<Save> {
+    delimited(header("RDY"), one_of("01"), line_ending)(i)
+}
+pub type Save = char;
+
+pub fn save(i: &str) -> PResult<Save> {
+    delimited(header("SAVE"), one_of("01"), line_ending)(i)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,10 +195,14 @@ impl Default for Status {
     }
 }
 
-pub type List3 = Vec<List3Item>;
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct List3 {
+    pub contno: u8,
+    pub items: Vec<DeviceInfo>,
+}
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct List3Item {
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeviceInfo {
     pub contno: u8,
     pub busid: String,
     pub serno: String,
@@ -187,22 +212,22 @@ pub struct List3Item {
 }
 
 pub fn lst3(i: &str) -> PResult<List3> {
-    let (i, _) = terminated(header("LST3"), remainder)(i)?;
-    many_m_n(
+    let (i, contno) = terminated(header("LST3"), remainder)(i)?;
+    let head = format!("LST|{}_", contno);
+    let (i, items) = many_m_n(
         1,
         30,
         map_res(
             tuple((
-                preceded(tag("LST|"), contno),
-                alphanumeric1,
+                preceded(tag(head.as_ref()), alphanumeric1),
                 preceded(cc('|'), alphanumeric1),
                 preceded(cc('|'), identifier),
                 preceded(cc('|'), alphanumeric1),
                 opt(preceded(cc('|'), not_line_ending)),
                 line_ending,
             )),
-            |(contno, busid, serno, status, artno, name, _nl)| -> Result<_, Error> {
-                Ok(List3Item {
+            |(busid, serno, status, artno, name, _nl)| -> Result<_, Error> {
+                Ok(DeviceInfo {
                     contno,
                     busid: String::from(busid),
                     serno: String::from(serno),
@@ -214,7 +239,8 @@ pub fn lst3(i: &str) -> PResult<List3> {
                 })
             },
         ),
-    )(i)
+    )(i)?;
+    Ok((i, List3 { contno, items }))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -272,7 +298,11 @@ pub fn dio(i: &str) -> PResult<DIO> {
 pub enum Response {
     Keepalive(Keepalive),
     Info(Info),
+    Err(Err),
     Event(Event),
+    Rst(Rst),
+    Rdy(Rdy),
+    Save(Save),
     Dataprint(Dataprint),
     Datatime(Datatime),
     Date(Date),
@@ -287,13 +317,17 @@ pub fn parse(i: &str) -> PResult<Response> {
     alt((
         map(kal, |v| Response::Keepalive(v)),
         map(inf, |v| Response::Info(v)),
+        map(err, |v| Response::Err(v)),
         map(evt, |v| Response::Event(v)),
-        map(date, |v| Response::Date(v)),
-        map(time, |v| Response::Time(v)),
+        map(rst, |v| Response::Rst(v)),
+        map(rdy, |v| Response::Rdy(v)),
+        map(save, |v| Response::Save(v)),
         map(dataprint, |v| Response::Dataprint(v)),
         map(datatime, |v| Response::Datatime(v)),
-        map(csi, |v| Response::CSI(v)),
+        map(date, |v| Response::Date(v)),
+        map(time, |v| Response::Time(v)),
         map(lst3, |v| Response::List3(v)),
+        map(csi, |v| Response::CSI(v)),
         map(devstatus, |v| Response::Devstatus(v)),
         map(dio, |v| Response::DIO(v)),
     ))(i)
@@ -318,7 +352,16 @@ mod test {
 
     #[test]
     fn parse_dataprint() {
-        assert_eq!(dataprint("1_DATAPRINT|1\n").unwrap(), ("", true));
+        assert_eq!(
+            dataprint("1_DATAPRINT|1\n").unwrap(),
+            (
+                "",
+                Dataprint {
+                    contno: 1,
+                    flag: true
+                }
+            )
+        );
     }
 
     #[test]
@@ -359,32 +402,35 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
         assert_eq!(rem, "1_EVT|0:02:55\n");
         assert_eq!(
             mtch,
-            vec![
-                List3Item {
-                    contno: 1,
-                    busid: "OWD1".into(),
-                    serno: "EF000019096A4026".into(),
-                    status: Online,
-                    artno: "11150".into(),
-                    name: None
-                },
-                List3Item {
-                    contno: 1,
-                    busid: "OWD2".into(),
-                    serno: "4300001982956429".into(),
-                    status: Online,
-                    artno: "DS2408".into(),
-                    name: Some("K8".into())
-                },
-                List3Item {
-                    contno: 1,
-                    busid: "OWD4".into(),
-                    serno: "FFFFFFFFFFFFFFFF".into(),
-                    status: Unconfigured,
-                    artno: "none".into(),
-                    name: None
-                },
-            ]
+            List3 {
+                contno: 1,
+                items: vec![
+                    DeviceInfo {
+                        contno: 1,
+                        busid: "OWD1".into(),
+                        serno: "EF000019096A4026".into(),
+                        status: Online,
+                        artno: "11150".into(),
+                        name: None
+                    },
+                    DeviceInfo {
+                        contno: 1,
+                        busid: "OWD2".into(),
+                        serno: "4300001982956429".into(),
+                        status: Online,
+                        artno: "DS2408".into(),
+                        name: Some("K8".into())
+                    },
+                    DeviceInfo {
+                        contno: 1,
+                        busid: "OWD4".into(),
+                        serno: "FFFFFFFFFFFFFFFF".into(),
+                        status: Unconfigured,
+                        artno: "none".into(),
+                        name: None
+                    },
+                ]
+            }
         );
     }
 

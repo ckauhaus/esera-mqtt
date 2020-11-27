@@ -1,8 +1,7 @@
-use crate::{parser, pick, ControllerConnection, MqttMsg, Response, Status};
+use crate::{parser, DeviceInfo, MqttMsg, Response, Status};
 
+use crossbeam::channel::Sender;
 use enum_dispatch::enum_dispatch;
-use std::fmt;
-use std::io::prelude::*;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,64 +15,21 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 #[enum_dispatch]
 pub trait Device {
     /// Device initialization and retained MQTT info. Prepare to be called several times.
-    fn setup<S>(&mut self, _conn: &mut ControllerConnection<S>) -> Result<Vec<MqttMsg>>
-    where
-        S: Read + Write + fmt::Debug,
-    {
-        Ok(Vec::default())
-    }
+    fn setup<S>(&mut self, _conn: Sender<String>) {}
 
     fn handle_1wire(&mut self, _resp: Response) -> Result<Vec<MqttMsg>> {
         Ok(Vec::default())
     }
 
-    fn handle_mqtt<S>(&self, _msg: MqttMsg, _conn: &mut ControllerConnection<S>) -> Result<()>
-    where
-        S: Read + Write + fmt::Debug,
-    {
-        Ok(())
-    }
-}
-
-/// Generic parameters common to all devices on the bus
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct DeviceInfo {
-    pub artno: String,
-    pub contno: u8,
-    pub busid: String,
-    pub serno: String,
-    pub status: Status,
-    pub name: Option<String>,
-}
-
-impl DeviceInfo {
-    fn new(
-        artno: String,
-        contno: u8,
-        busid: String,
-        serno: String,
-        status: Status,
-        name: Option<String>,
-    ) -> Self {
-        Self {
-            artno,
-            contno,
-            busid,
-            serno,
-            status,
-            name,
-        }
+    fn handle_mqtt<S>(&self, _msg: MqttMsg) -> Result<Vec<String>> {
+        Ok(Vec::default())
     }
 
-    fn mqtt_msg<T: AsRef<str>, P: Into<String>>(&self, topic: T, payload: P) -> MqttMsg {
-        (
-            format!("ESERA/{}/{}", self.contno, topic.as_ref()),
-            payload.into(),
-        )
-    }
+    fn display(&self) -> String;
 }
 
 #[enum_dispatch(Device)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Model {
     Controller2(Controller2),
     // HubIII(HubIII),
@@ -83,16 +39,8 @@ pub enum Model {
 }
 
 impl Model {
-    fn select(
-        artno: String,
-        contno: u8,
-        busid: String,
-        serno: String,
-        status: Status,
-        name: Option<String>,
-    ) -> Self {
-        let a = artno.clone();
-        let info = DeviceInfo::new(artno, contno, busid, serno, status, name);
+    fn select(info: DeviceInfo) -> Self {
+        let a = info.artno.clone();
         match &*a {
             "11340" => Self::Controller2(Controller2::new(info)),
             //         "11221" => Box::new(Dimmer1::default()),
@@ -100,6 +48,12 @@ impl Model {
             //         "11322" => Box::new(HubIII::default()),
             _ => Self::Unknown(Unknown::new(info)),
         }
+    }
+}
+
+impl Default for Model {
+    fn default() -> Self {
+        Self::Unknown(Unknown::default())
     }
 }
 
@@ -127,7 +81,14 @@ impl Controller2 {
     new!(Controller2);
 }
 
-impl Device for Controller2 {}
+impl Device for Controller2 {
+    fn display<'a>(&'a self) -> String {
+        format!(
+            "Controller2 ({}) @ {}/{}",
+            self.info.artno, self.info.contno, self.info.serno
+        )
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Unknown {
@@ -138,7 +99,14 @@ impl Unknown {
     new!(Unknown);
 }
 
-impl Device for Unknown {}
+impl Device for Unknown {
+    fn display<'a>(&'a self) -> String {
+        format!(
+            "Unknown device ({}) @ {}/{}",
+            self.info.artno, self.info.contno, self.info.serno
+        )
+    }
+}
 //         ctrl.send_line(&format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))
 //             .await?;
 //         pick(ctrl, parser::date).await?;
