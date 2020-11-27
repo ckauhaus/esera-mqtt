@@ -8,8 +8,6 @@ use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::prelude::*;
-#[cfg(test)]
-use std::io::Cursor;
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::thread;
@@ -74,17 +72,6 @@ impl ControllerConnection<TcpStream> {
         self.send_line("SET,SYS,SAVE")?;
         pick!(self, Save)?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-impl ControllerConnection<Cursor<Vec<u8>>> {
-    fn dummy() -> Self {
-        Self::from_stream(Cursor::new(Vec::new()))
-    }
-
-    fn dump(self) -> Vec<u8> {
-        self.stream.into_inner().into_inner()
     }
 }
 

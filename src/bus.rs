@@ -1,6 +1,7 @@
 use crate::device::*;
 use crate::{parser, Device, DeviceInfo, Response, Status, TwoWay, CSI};
 
+use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
 
@@ -16,8 +17,17 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub struct Universe(Vec<Bus>);
 
 impl Universe {
-    fn cont(&mut self, contno: u8) -> &mut Bus {
-        &mut self.0[contno as usize]
+    // controller/device
+    fn cd(&mut self, contno: u8, devno: usize) -> &mut Model {
+        &mut self.0[contno as usize].devices[devno]
+    }
+
+    // controller/busaddr
+    fn ca(&mut self, contno: u8, addr: &str) -> Option<&mut Model> {
+        match self.0[contno as usize].addrs.get(addr) {
+            Some(&i) => Some(&mut self.0[contno as usize].devices[i]),
+            None => None,
+        }
     }
 
     fn set_controller(&mut self, csi: parser::CSI) {
@@ -48,12 +58,13 @@ impl Universe {
             "BUG: Trying to populate 1-Wire bus {} before setting controller info",
             c
         );
-        info!("[{}] Loading device list", c);
+        debug!("[{}] Loading device list", c);
         for (i, dev) in lst.items.into_iter().enumerate().take(30) {
             // devices[0] is reserved for the controller
             self.0[c].devices[i + 1] = Model::select(dev)
         }
         info!("{}", self.0[c]);
+        self.0[c].register();
     }
 
     pub fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
@@ -64,9 +75,16 @@ impl Universe {
                 self.populate(l);
                 return Ok(self.0[c].init());
             }
+            Response::DIO(ref dio) => return self.cd(dio.contno, 0).handle_1wire(resp),
+            Response::Devstatus(ref s) => {
+                debug!("[{}] {:?}", s.contno, resp);
+                if let Some(dev) = self.ca(s.contno, &s.addr) {
+                    return dev.handle_1wire(resp);
+                }
+            }
+            Response::Keepalive(_) => (),
             Response::Event(_) => (),
             Response::Info(_) => (),
-            Response::DIO(ref dio) => return self.cont(dio.contno).devices[0].handle_1wire(resp),
             _ => warn!("Unknown controller event {:?}", resp),
         }
         Ok(TwoWay::default())
@@ -86,6 +104,26 @@ impl fmt::Display for Universe {
 pub struct Bus {
     csi: CSI,
     devices: [Model; 31],
+    addrs: HashMap<String, usize>, // indexes into `devices`
+}
+
+impl Bus {
+    fn register(&mut self) {
+        for (i, dev) in self.devices.iter().enumerate() {
+            self.addrs
+                .extend(dev.register_1wire().into_iter().map(|a| (a, i)))
+        }
+        debug!("[{}] Registry: {:?}", self.csi.contno, self.addrs);
+    }
+
+    fn init(&self) -> TwoWay {
+        TwoWay::from_1wire(
+            self.devices
+                .iter()
+                .filter(|m| m.configured())
+                .flat_map(|d| d.init()),
+        )
+    }
 }
 
 impl fmt::Display for Bus {
@@ -95,16 +133,5 @@ impl fmt::Display for Bus {
             writeln!(f, "{}", dev)?;
         }
         Ok(())
-    }
-}
-
-impl Bus {
-    fn init(&self) -> TwoWay {
-        TwoWay::from_1wire(
-            self.devices
-                .iter()
-                .filter(|m| m.configured())
-                .flat_map(|d| d.init()),
-        )
     }
 }

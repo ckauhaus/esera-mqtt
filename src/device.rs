@@ -1,4 +1,4 @@
-use crate::{parser, DeviceInfo, MqttMsg, Response, TwoWay};
+use crate::{bool2str, centi2float, parser, DeviceInfo, MqttMsg, Response, TwoWay};
 
 use enum_dispatch::enum_dispatch;
 use std::fmt;
@@ -22,6 +22,8 @@ pub trait Device {
         Vec::new()
     }
 
+    fn register_1wire(&self) -> Vec<String>;
+
     fn handle_1wire(&mut self, _resp: Response) -> Result<TwoWay> {
         Ok(TwoWay::default())
     }
@@ -34,10 +36,9 @@ pub trait Device {
 #[enum_dispatch(Device)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Model {
+    TempHum(TempHum),
+    Switch8(Switch8),
     Controller2(Controller2),
-    // HubIII(HubIII),
-    // Dimmer1(Dimmer1),
-    // Switch8_16A(Switch8_16A),
     Unknown(Unknown),
 }
 
@@ -45,10 +46,10 @@ impl Model {
     pub fn select(info: DeviceInfo) -> Self {
         let a = info.artno.clone();
         match &*a {
+            "11150" => Self::TempHum(TempHum::new(info)),
+            "11220" => Self::Switch8(Switch8::new(info)),
+            "11228" => Self::Switch8(Switch8::new(info)),
             "11340" => Self::Controller2(Controller2::new(info)),
-            //         "11221" => Box::new(Dimmer1::default()),
-            //         "11228" => Box::new(Switch8_16A::default()),
-            //         "11322" => Box::new(HubIII::default()),
             _ => Self::Unknown(Unknown::new(info)),
         }
     }
@@ -65,7 +66,7 @@ impl fmt::Display for Model {
         let info = self.info();
         write!(
             f,
-            "[{}] {} {} ({}) S/N {} ",
+            "[{}] {:-5} {:-12} ({}) S/N {} ",
             info.contno,
             info.busid,
             self.name(),
@@ -106,12 +107,56 @@ macro_rules! std_methods {
     };
 }
 
+fn digital_io<'a>(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: u32) -> TwoWay<'a> {
+    let mut res = TwoWay::default();
+    for bit in 0..n {
+        res.push_mqtt(
+            info,
+            format_args!("{}/ch{}", inout, bit + 1),
+            bool2str(val & (1 << bit)),
+        )
+    }
+    res
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TempHum {
+    info: DeviceInfo,
+}
+
+impl TempHum {
+    new!(TempHum);
+}
+
+impl Device for TempHum {
+    std_methods!(TempHum);
+
+    fn register_1wire(&self) -> Vec<String> {
+        [1, 3, 4]
+            .iter()
+            .map(|i| format!("{}_{}", self.info.busid, i))
+            .collect()
+    }
+
+    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
+        Ok(match resp {
+            Response::Devstatus(s) => match s.addr.rsplit('_').nth(0).unwrap() {
+                "1" => TwoWay::mqtt(self.info.topic("temp"), centi2float(s.val)),
+                "3" => TwoWay::mqtt(self.info.topic("hum"), centi2float(s.val)),
+                "4" => TwoWay::mqtt(self.info.topic("dew"), centi2float(s.val)),
+                other => panic!("BUG: Unknown busaddr {}", other),
+            },
+            _ => {
+                warn!("[{}] TempHum: no handler for {:?}", self.info.contno, resp);
+                TwoWay::default()
+            }
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Controller2 {
     info: DeviceInfo,
-    inputs: u8,
-    outputs: u8,
-    ana: f32,
     dio: parser::DIOStatus,
 }
 
@@ -126,18 +171,68 @@ impl Device for Controller2 {
         vec!["GET,SYS,DIO".into()]
     }
 
+    fn register_1wire(&self) -> Vec<String> {
+        vec!["SYS1_1".into(), "SYS2_1".into(), "SYS3".into()]
+    }
+
     fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
         Ok(match resp {
             Response::DIO(dio) => {
                 debug!("[{}] DIO status: {}", dio.contno, dio.status);
                 self.dio = dio.status;
-                TwoWay::mqtt(&self.info, "DIO", dio.status)
+                TwoWay::mqtt(self.info.topic("DIO"), dio.status)
+            }
+            Response::Devstatus(s) => {
+                debug!("[{}] Controller2 {} => {:b}", s.contno, s.addr, s.val);
+                match s.addr.as_ref() {
+                    "SYS1_1" => digital_io(&self.info, 4, "in", s.val),
+                    "SYS2_1" => digital_io(&self.info, 5, "out", s.val),
+                    "SYS3" => TwoWay::mqtt(self.info.topic("out/ana"), centi2float(s.val)),
+                    other => panic!("BUG: Unknown busaddr {}", other),
+                }
             }
             _ => {
                 warn!(
-                    "[{}] Controller2: don't know how to handle {:?}",
+                    "[{}] Controller2: no handler for {:?}",
                     self.info.contno, resp
                 );
+                TwoWay::default()
+            }
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Switch8 {
+    info: DeviceInfo,
+}
+
+impl Switch8 {
+    new!(Switch8);
+}
+
+impl Device for Switch8 {
+    std_methods!(Switch8);
+
+    fn register_1wire(&self) -> Vec<String> {
+        vec![
+            format!("{}_1", self.info.busid),
+            format!("{}_3", self.info.busid),
+        ]
+    }
+
+    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
+        Ok(match resp {
+            Response::Devstatus(s) => {
+                debug!("[{}] Switch8 {} => {:b}", s.contno, s.addr, s.val);
+                match s.addr.rsplit('_').nth(0).unwrap() {
+                    "1" => digital_io(&self.info, 8, "in", s.val),
+                    "3" => digital_io(&self.info, 8, "out", s.val),
+                    other => panic!("BUG: Unknown busaddr {}", other),
+                }
+            }
+            _ => {
+                warn!("[{}] Switch8: no handler for {:?}", self.info.contno, resp);
                 TwoWay::default()
             }
         })
@@ -158,5 +253,9 @@ impl Device for Unknown {
 
     fn configured(&self) -> bool {
         false
+    }
+
+    fn register_1wire(&self) -> Vec<String> {
+        Vec::new()
     }
 }

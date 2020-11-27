@@ -27,10 +27,10 @@ pub struct MqttMsg {
 }
 
 impl MqttMsg {
-    pub fn new<S: Into<String>, P: Into<String>>(topic: S, payload: P) -> Self {
+    pub fn new<S: Into<String>, P: ToString>(topic: S, payload: P) -> Self {
         Self {
             topic: topic.into(),
-            payload: payload.into(),
+            payload: payload.to_string(),
         }
     }
 }
@@ -45,6 +45,7 @@ pub struct MqttConnection {
 fn process_packet(pck: Packet, subs: &Subscriptions) -> bool {
     match pck {
         Packet::Publish(msg) => {
+            debug!("=== {:?}", msg);
             let subs = subs.read();
             let topic = msg.topic.clone();
             for (t, ch) in subs.iter() {
@@ -69,7 +70,6 @@ fn start_mqtt_loop(host: String, mut conn: rumqttc::Connection, subs: Subscripti
             for evt in conn.iter() {
                 match evt {
                     Ok(Event::Incoming(pck)) => {
-                        debug!("=== {:?}", pck);
                         if !process_packet(pck, &subs) {
                             return;
                         }

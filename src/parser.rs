@@ -1,3 +1,5 @@
+use crate::DeviceInfo;
+
 use strum_macros::{AsRefStr, Display, EnumDiscriminants, EnumString, IntoStaticStr};
 use thiserror::Error;
 
@@ -196,23 +198,6 @@ pub struct List3 {
     pub items: Vec<DeviceInfo>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DeviceInfo {
-    pub contno: u8,
-    pub busid: String,
-    pub serno: String,
-    pub status: Status,
-    pub artno: String,
-    pub name: Option<String>,
-}
-
-impl DeviceInfo {
-    /// Format MQTT message topic relating to this device
-    pub fn topic<S: AsRef<str>>(&self, item: S) -> String {
-        format!("ESERA/{}/{}/{}", self.contno, self.busid, item.as_ref())
-    }
-}
-
 pub fn lst3(i: &str) -> PResult<List3> {
     let (i, contno) = terminated(header("LST3"), remainder)(i)?;
     let head = format!("LST|{}_", contno);
@@ -247,9 +232,9 @@ pub fn lst3(i: &str) -> PResult<List3> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Devstatus {
-    contno: u8,
-    addr: String,
-    val: u32,
+    pub contno: u8,
+    pub addr: String,
+    pub val: u32,
 }
 
 pub fn devstatus(i: &str) -> PResult<Devstatus> {

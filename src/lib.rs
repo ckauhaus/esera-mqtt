@@ -6,13 +6,14 @@ mod parser;
 
 #[macro_use]
 extern crate log;
+use std::fmt;
 use std::iter;
 
 pub use bus::Universe;
 pub use controller::ControllerConnection;
 pub use device::Device;
 pub use mqtt::{MqttConnection, MqttMsg};
-pub use parser::{DeviceInfo, Response, Status, CSI};
+pub use parser::{Response, Status, CSI};
 
 pub fn bool2str<N: Into<u32>>(n: N) -> &'static str {
     match n.into() {
@@ -31,6 +32,33 @@ pub fn float2centi(f: f32) -> u32 {
 
 pub fn centi2float(c: u32) -> f32 {
     (c as f32) / 100.
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DeviceInfo {
+    pub contno: u8,
+    pub busid: String,
+    pub serno: String,
+    pub status: Status,
+    pub artno: String,
+    pub name: Option<String>,
+}
+
+impl DeviceInfo {
+    /// Format MQTT message topic relating to this device
+    pub fn fmt(&self, args: fmt::Arguments) -> String {
+        format!(
+            "ESERA/{}/{}/{}",
+            self.contno,
+            self.name.as_ref().unwrap_or(&self.busid),
+            args
+        )
+    }
+
+    /// Format MQTT message topic relating to this device
+    pub fn topic<S: AsRef<str>>(&self, item: S) -> String {
+        self.fmt(format_args!("{}", item.as_ref()))
+    }
 }
 
 pub struct TwoWay<'a> {
@@ -53,15 +81,20 @@ impl<'a> TwoWay<'a> {
         }
     }
 
-    pub fn mqtt<A: AsRef<str>, S: Into<String>>(
-        devinfo: &DeviceInfo,
-        detail: A,
-        payload: S,
-    ) -> Self {
+    pub fn mqtt<T: Into<String>, S: ToString>(topic: T, payload: S) -> Self {
         Self {
-            mqtt: vec![MqttMsg::new(devinfo.topic(detail), payload)],
+            mqtt: vec![MqttMsg::new(topic, payload)],
             ow: Box::new(iter::empty()),
         }
+    }
+
+    pub fn push_mqtt<S: ToString>(
+        &mut self,
+        devinfo: &DeviceInfo,
+        detail: fmt::Arguments,
+        payload: S,
+    ) {
+        self.mqtt.push(MqttMsg::new(devinfo.fmt(detail), payload))
     }
 }
 
