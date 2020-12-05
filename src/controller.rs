@@ -3,7 +3,7 @@ use crate::pick;
 
 use chrono::Local;
 use crossbeam::atomic::AtomicCell;
-use crossbeam::channel::{self, Receiver, Sender};
+use crossbeam::channel::{Receiver, Sender};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::fmt;
@@ -196,7 +196,7 @@ impl<S> ControllerConnection<S>
 where
     S: Read + Write + fmt::Debug + Send,
 {
-    fn event_loop(&self, up: Receiver<String>, down: Sender<Result<Response>>) -> Result<()> {
+    pub fn event_loop(&self, up: Receiver<String>, down: Sender<Result<Response>>) -> Result<()> {
         let done = AtomicCell::new(false);
         crossbeam::scope(|sc| {
             sc.builder()
@@ -248,46 +248,6 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.get()
     }
-}
-
-fn run<A>(addr: A) -> Result<(Sender<String>, Receiver<Result<Response>>)>
-where
-    A: ToSocketAddrs + Clone + fmt::Debug + Send + 'static,
-{
-    let (up_tx, up_rx) = channel::unbounded();
-    let (down_tx, down_rx) = channel::unbounded();
-    let mut c = ControllerConnection::new(addr.clone())?;
-    down_tx.send(c.csi().map(|c| Response::CSI(c))).ok();
-    down_tx.send(c.list().map(|l| Response::List3(l))).ok();
-    thread::spawn(move || loop {
-        match c.event_loop(up_rx.clone(), down_tx.clone()) {
-            Ok(_) => return,
-            Err(e) => error!("[{}] Controller event loop died: {}", c.contno, e),
-        }
-        warn!("Reconnecting to {:?}", &addr);
-        while let Err(e) = c.connect(addr.clone()) {
-            error!("[{}] Reconnect failed: {}", c.contno, e);
-            info!("Retrying in 5s...");
-            thread::sleep(Duration::new(5, 0));
-        }
-    });
-    Ok((up_tx, down_rx))
-}
-
-pub fn create(
-    addrs: &[String],
-    default_port: u16,
-) -> Result<Vec<(Sender<String>, Receiver<Result<Response>>)>> {
-    addrs
-        .iter()
-        .map(|c| {
-            if c.find(':').is_some() {
-                run(c.to_string())
-            } else {
-                run((c.to_string(), default_port))
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

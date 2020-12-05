@@ -2,11 +2,15 @@
 extern crate log;
 
 use anyhow::{Context, Result};
-use crossbeam::channel;
+use crossbeam::channel::{self, Receiver, Sender};
 use rumqttc::MqttOptions;
+use std::fmt;
+use std::net::ToSocketAddrs;
+use std::thread;
+use std::time::Duration;
 use structopt::StructOpt;
 
-use esera_mqtt::{controller, MqttConnection, Universe};
+use esera_mqtt::{ControllerConnection, ControllerError, MqttConnection, Response, Universe};
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -27,31 +31,90 @@ struct Opt {
     mqtt_cred: String,
 }
 
-fn run(mqtt: &mut MqttConnection, opt: Opt) -> Result<()> {
+fn ctrl_loop<A>(addr: A) -> Result<(Sender<String>, Receiver<Result<Response, ControllerError>>)>
+where
+    A: ToSocketAddrs + Clone + fmt::Debug + Send + 'static,
+{
+    let (up_tx, up_rx) = channel::unbounded();
+    let (down_tx, down_rx) = channel::unbounded();
+    let mut c = ControllerConnection::new(addr.clone())?;
+    down_tx.send(c.csi().map(|c| Response::CSI(c))).ok();
+    // this is going to trigger registration which will be handled via ordinary event processing
+    down_tx.send(c.list().map(|l| Response::List3(l))).ok();
+    thread::spawn(move || loop {
+        match c.event_loop(up_rx.clone(), down_tx.clone()) {
+            Ok(_) => return,
+            Err(e) => error!("[{}] Controller event loop died: {}", c.contno, e),
+        }
+        warn!("Reconnecting to {:?}", &addr);
+        while let Err(e) = c.connect(addr.clone()) {
+            error!("[{}] Reconnect failed: {}", c.contno, e);
+            info!("Retrying in 5s...");
+            thread::sleep(Duration::new(5, 0));
+        }
+    });
+    Ok((up_tx, down_rx))
+}
+
+pub fn ctrl_create(
+    addrs: &[String],
+    default_port: u16,
+) -> Result<Vec<(Sender<String>, Receiver<Result<Response, ControllerError>>)>> {
+    addrs
+        .iter()
+        .map(|c| {
+            if c.find(':').is_some() {
+                ctrl_loop(c.to_string())
+            } else {
+                ctrl_loop((c.to_string(), default_port))
+            }
+        })
+        .collect()
+}
+
+fn run(opt: Opt) -> Result<()> {
     let mut universe = Universe::default();
-    let ctrl_chan = controller::create(&opt.controllers, opt.default_port)
-        .context("Controller initialization failed")?;
+    let (ctrl_senders, ctrl_receivers): (Vec<_>, Vec<_>) =
+        ctrl_create(&opt.controllers, opt.default_port)
+            .context("Controller initialization failed")?
+            .into_iter()
+            .unzip();
     let mut sel = channel::Select::new();
-    for (_, down) in &ctrl_chan {
-        sel.recv(down);
+    for down in &ctrl_receivers {
+        sel.recv(&down);
     }
+
+    let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
+    let mut parts = opt.mqtt_cred.splitn(2, ':');
+    match (parts.next(), parts.next()) {
+        (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
+        (Some(user), None) => mqtt_opt.set_credentials(user, ""),
+        _ => &mut mqtt_opt,
+    };
+    let (mut mqtt, mqtt_chan) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
+    let mqtt_idx = sel.recv(&mqtt_chan);
+
     debug!("Entering main event loop");
     loop {
-        let oper = sel.select();
-        let i = oper.index();
-        match oper.recv(&ctrl_chan[i].1) {
-            Ok(Ok(resp)) => {
-                let res = universe.handle_1wire(resp)?;
-                for msg in res.mqtt {
-                    mqtt.send(msg)?;
-                }
-                for cmd in res.ow {
-                    &ctrl_chan[i].0.send(cmd)?;
-                }
+        let op = sel.select();
+        match op.index() {
+            i if i < ctrl_receivers.len() => {
+                match op.recv(&ctrl_receivers[i]) {
+                    Ok(Ok(resp)) => {
+                        universe
+                            .handle_1wire(resp)?
+                            .send(&mut mqtt, &ctrl_senders[i])?;
+                    }
+                    Ok(Err(e)) => error!("{}", e),
+                    Err(_) => break, // channel closed
+                };
             }
-            Ok(Err(e)) => error!("{}", e),
-            Err(_) => break, // channel closed
-        };
+            i if i == mqtt_idx => match op.recv(&mqtt_chan) {
+                Ok(_msg) => todo!("handle incoming mqtt"),
+                Err(_) => break, // channel closed
+            },
+            _ => panic!("BUG: unknown select() channel indexed"),
+        }
     }
     Ok(())
 }
@@ -60,26 +123,10 @@ fn main() {
     env_logger::init();
     let opt = Opt::from_args();
     info!("Connecting to MQTT broker at {}", opt.mqtt_host);
-    let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
-    let mut parts = opt.mqtt_cred.splitn(2, ':');
-    match (parts.next(), parts.next()) {
-        (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
-        (Some(user), None) => mqtt_opt.set_credentials(user, ""),
-        _ => &mut mqtt_opt,
-    };
-    let mut mqtt = match MqttConnection::new(&opt.mqtt_host, mqtt_opt) {
-        Ok(mqtt) => mqtt,
-        Err(e) => {
-            error!("Failed to connect to MQTT broker: {}", e);
-            std::process::exit(2);
-        }
-    };
-    let exitcode = if let Err(e) = run(&mut mqtt, opt) {
+    std::process::exit(if let Err(e) = run(opt) {
         error!("FATAL: {}", e);
         1
     } else {
         0
-    };
-    mqtt.disconnect();
-    std::process::exit(exitcode);
+    })
 }

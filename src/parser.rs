@@ -172,7 +172,7 @@ fn identifier(i: &str) -> PResult<&str> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr)]
 pub enum Status {
-    #[strum(serialize = "S_0")]
+    #[strum(serialize = "S_0", to_string = "Online")]
     Online,
     #[strum(serialize = "S_1")]
     Err1,
@@ -180,7 +180,7 @@ pub enum Status {
     Err2,
     #[strum(serialize = "S_3")]
     Err3,
-    #[strum(serialize = "S_5")]
+    #[strum(serialize = "S_5", to_string = "Offline")]
     Offline,
     #[strum(serialize = "S_10")]
     Unconfigured,
@@ -257,13 +257,13 @@ pub fn devstatus(i: &str) -> PResult<Devstatus> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr, IntoStaticStr)]
 pub enum DIOStatus {
-    #[strum(serialize = "0", to_string = "INDEPENDENT+LEVEL")]
+    #[strum(serialize = "0", to_string = "Independent+Level")]
     IndependentLevel,
-    #[strum(serialize = "1", to_string = "INDEPENDENT+EDGE")]
+    #[strum(serialize = "1", to_string = "Independent+Edge")]
     IndependentEdge,
-    #[strum(serialize = "2", to_string = "LINKED+LEVEL")]
+    #[strum(serialize = "2", to_string = "Linked+Level")]
     LinkedLevel,
-    #[strum(serialize = "3", to_string = "LINKED+EDGE")]
+    #[strum(serialize = "3", to_string = "Linked+Edge")]
     LinkedEdge,
 }
 
