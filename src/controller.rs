@@ -36,7 +36,8 @@ where
     pub queue: Mutex<VecDeque<Result<Response>>>,
     pub contno: u8,
     partial: Mutex<String>,
-    stream: Mutex<S>,
+    reader: Mutex<S>,
+    writer: Mutex<S>,
 }
 
 impl ControllerConnection<TcpStream> {
@@ -44,22 +45,23 @@ impl ControllerConnection<TcpStream> {
         info!("Connecting to 1-Wire controller at {:?}", addr);
         let conn = TcpStream::connect(&addr)?;
         conn.set_nodelay(false)?;
-        let c = Self::from_stream(conn);
+        let reader = conn.try_clone().unwrap();
+        let c = Self::from_streams(reader, conn);
         c.setup()?;
         Ok(c)
     }
 
+    // XXX rename to reconnect
     pub fn connect<A: ToSocketAddrs>(&mut self, addr: A) -> Result<()> {
         let addr: Vec<_> = addr.to_socket_addrs()?.collect();
         info!("Connecting to 1-Wire controller at {:?}", addr);
-        self.stream = Mutex::new(TcpStream::connect(&*addr)?);
+        let stream = TcpStream::connect(&*addr)?;
+        self.reader = Mutex::new(stream.try_clone().unwrap());
+        self.writer = Mutex::new(stream);
         self.setup()
     }
 
     fn setup(&self) -> Result<()> {
-        // self.send_line(format!("SET,SYS,RST,1"))?;
-        // pick!(self, Rst)?;
-        // pick!(self, Rdy)?;
         self.send_line(format!("SET,SYS,DATAPRINT,1"))?;
         pick!(self, Dataprint)?;
         let now = Local::now();
@@ -67,7 +69,7 @@ impl ControllerConnection<TcpStream> {
         pick!(self, Date)?;
         self.send_line(format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))?;
         pick!(self, Time)?;
-        self.send_line("SET,SYS,DATATIME,20")?;
+        self.send_line("SET,SYS,DATATIME,30")?;
         pick!(self, Datatime)?;
         self.send_line("SET,SYS,SAVE")?;
         pick!(self, Save)?;
@@ -97,12 +99,13 @@ impl<S> ControllerConnection<S>
 where
     S: Read + Write + fmt::Debug,
 {
-    pub fn from_stream(stream: S) -> Self {
+    pub fn from_streams(reader: S, writer: S) -> Self {
         Self {
             queue: Mutex::new(VecDeque::default()),
             contno: 0,
             partial: Mutex::new(String::with_capacity(1 << 12)),
-            stream: Mutex::new(stream),
+            reader: Mutex::new(reader),
+            writer: Mutex::new(writer),
         }
     }
 
@@ -111,14 +114,16 @@ where
         let mut line = line.into();
         line.push_str("\r\n");
         debug!("[{}] >>> {}", self.contno, line.trim());
-        self.stream.lock().write_all(line.as_bytes())
+        let mut w = self.writer.lock();
+        w.write_all(line.as_bytes())?;
+        w.flush()
     }
 
     /// Gets additional data from underlying stream and parses it as fas as possible.
     /// Returns false if the underlying stream has been closed.
     fn receive(&self) -> Result<bool> {
         let mut buf = [0; 1 << 10];
-        let len = self.stream.lock().read(&mut buf)?;
+        let len = self.reader.lock().read(&mut buf)?;
         if len == 0 {
             return Ok(false);
         }
@@ -260,21 +265,28 @@ mod test {
 
     #[test]
     fn get_next_item() {
-        let mut c = ControllerConnection::from_stream(Cursor::new(B("1_EVT|21:02:43\n").to_vec()));
+        let mut c = ControllerConnection::from_streams(
+            Cursor::new(B("1_EVT|21:02:43\n").to_vec()),
+            Cursor::new(Vec::new()),
+        );
         assert_matches!(c.next(), Some(Ok(Response::Event(_))));
     }
 
     #[test]
     fn wait_on_closed_reader_should_fail() {
-        let mut c = ControllerConnection::from_stream(Cursor::new(B("").to_vec()));
+        let mut c = ControllerConnection::from_streams(
+            Cursor::new(B("").to_vec()),
+            Cursor::new(Vec::new()),
+        );
         assert_matches!(c.next(), None);
     }
 
     #[test]
     fn parse_garbage() {
-        let mut c = ControllerConnection::from_stream(Cursor::new(
-            B("<BS>i������J���Ӈ��\n1_INF|21:28:53\n").to_vec(),
-        ));
+        let mut c = ControllerConnection::from_streams(
+            Cursor::new(B("<BS>i������J���Ӈ��\n1_INF|21:28:53\n").to_vec()),
+            Cursor::new(Vec::new()),
+        );
         assert_matches!(c.next(), Some(Err(Error::Parse(_))));
         assert_matches!(c.next(), Some(Ok(Response::Info(_))));
         assert_matches!(c.next(), None);
@@ -282,19 +294,25 @@ mod test {
 
     #[test]
     fn pick_should_return_match() {
-        let mut c = ControllerConnection::from_stream(Cursor::new(B("1_DATE|20.09.20\n").to_vec()));
+        let mut c = ControllerConnection::from_streams(
+            Cursor::new(B("1_DATE|20.09.20\n").to_vec()),
+            Cursor::new(Vec::new()),
+        );
         assert_eq!(pick!(&mut c, Date).unwrap(), "20.09.20".to_string());
         assert!(c.queue.lock().is_empty());
     }
 
     #[test]
     fn wait_should_cut_out_match() {
-        let mut c = ControllerConnection::from_stream(Cursor::new(
-            B("1_KAL|1\n\
+        let mut c = ControllerConnection::from_streams(
+            Cursor::new(
+                B("1_KAL|1\n\
                1_DATAPRINT|1\n\
                1_DATE|07.11.20\n")
-            .to_vec(),
-        ));
+                .to_vec(),
+            ),
+            Cursor::new(Vec::new()),
+        );
         assert_eq!(pick!(&mut c, Dataprint).unwrap().flag, '1');
         assert_eq!(
             c.queue

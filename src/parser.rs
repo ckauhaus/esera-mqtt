@@ -172,17 +172,17 @@ fn identifier(i: &str) -> PResult<&str> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr)]
 pub enum Status {
-    #[strum(serialize = "S_0", to_string = "Online")]
+    #[strum(serialize = "0", to_string = "online")]
     Online,
-    #[strum(serialize = "S_1")]
+    #[strum(serialize = "1", to_string = "error_1")]
     Err1,
-    #[strum(serialize = "S_2")]
+    #[strum(serialize = "2", to_string = "error_2")]
     Err2,
-    #[strum(serialize = "S_3")]
+    #[strum(serialize = "3", to_string = "error_3")]
     Err3,
-    #[strum(serialize = "S_5", to_string = "Offline")]
+    #[strum(serialize = "5", to_string = "offline")]
     Offline,
-    #[strum(serialize = "S_10")]
+    #[strum(serialize = "10", to_string = "unconfigured")]
     Unconfigured,
 }
 
@@ -208,7 +208,7 @@ pub fn lst3(i: &str) -> PResult<List3> {
             tuple((
                 preceded(tag(head.as_ref()), alphanumeric1),
                 preceded(cc('|'), alphanumeric1),
-                preceded(cc('|'), identifier),
+                preceded(tag("|S_"), identifier),
                 preceded(cc('|'), alphanumeric1),
                 opt(preceded(cc('|'), not_line_ending)),
                 line_ending,
@@ -297,6 +297,29 @@ pub fn dio(i: &str) -> PResult<DIO> {
     )(i)
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OWDStatus {
+    pub contno: u8,
+    pub owd: u8,
+    pub status: Status,
+}
+
+pub fn owdstatus(i: &str) -> PResult<OWDStatus> {
+    map_res(
+        tuple((
+            contno,
+            delimited(tag("OWD_"), digit1, cc('|')),
+            terminated(digit1, line_ending),
+        )),
+        |(c, n, s)| -> Result<OWDStatus> {
+            Ok(OWDStatus {
+                contno: c,
+                owd: n.parse()?,
+                status: s.parse()?,
+            })
+        },
+    )(i)
+}
 #[derive(Debug, Clone, PartialEq, EnumDiscriminants)]
 #[strum_discriminants(name(ResponseKind))]
 pub enum Response {
@@ -314,6 +337,7 @@ pub enum Response {
     List3(List3),
     CSI(CSI),
     DIO(DIO),
+    OWDStatus(OWDStatus),
     Devstatus(Devstatus),
 }
 
@@ -333,6 +357,7 @@ pub fn parse(i: &str) -> PResult<Response> {
         map(lst3, |v| Response::List3(v)),
         map(csi, |v| Response::CSI(v)),
         map(dio, |v| Response::DIO(v)),
+        map(owdstatus, |v| Response::OWDStatus(v)),
         map(devstatus, |v| Response::Devstatus(v)),
     ))(i)
 }
@@ -485,5 +510,19 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
         );
         let (_, mtch) = parse("1_DIO|0\n").unwrap();
         assert_matches!(mtch, Response::DIO(_));
+    }
+
+    #[test]
+    fn parse_status() {
+        let (rem, mtch) = parse("1_OWD_2|5\n").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(
+            mtch,
+            Response::OWDStatus(OWDStatus {
+                contno: 1,
+                owd: 2,
+                status: Status::Offline
+            })
+        );
     }
 }

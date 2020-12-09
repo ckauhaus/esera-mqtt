@@ -1,3 +1,5 @@
+// XXX ESERA/+/status for controller with birth message and last will (online/offline)
+
 use crossbeam::channel::{self, Receiver, Sender};
 use rumqttc::{ConnectReturnCode, Event, MqttOptions, Packet, QoS};
 use std::fmt;
@@ -38,6 +40,31 @@ impl MqttMsg {
     pub fn sub<S: Into<String>>(topic: S) -> Self {
         Self::Sub {
             topic: topic.into(),
+        }
+    }
+
+    pub fn topic(&self) -> &str {
+        match self {
+            Self::Pub { ref topic, .. } => topic,
+            Self::Sub { ref topic } => topic,
+        }
+    }
+
+    /// Returns payload of a publish message. Panics if this is no publish message.
+    pub fn payload(&self) -> &str {
+        match self {
+            Self::Pub { ref payload, .. } => payload,
+            _ => panic!("Attempted to call MqttMsg::payload of a non-publish message"),
+        }
+    }
+
+    /// Returns true if this is a publish message which fits topic pattern as per MQTT match
+    /// syntax.
+    pub fn matches(&self, topic_pattern: &str) -> bool {
+        if let Self::Pub { topic, .. } = self {
+            rumqttc::matches(topic, topic_pattern)
+        } else {
+            false
         }
     }
 }
@@ -112,7 +139,6 @@ impl MqttConnection {
     }
 
     pub fn send(&mut self, msg: MqttMsg) -> Result<()> {
-        debug!("+++ {:?}", msg);
         Ok(match msg {
             MqttMsg::Pub { topic, payload } => {
                 self.client

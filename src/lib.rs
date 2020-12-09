@@ -24,28 +24,15 @@ pub enum Error {
     MQTT(#[from] mqtt::Error),
     #[error(transparent)]
     Controller(#[from] channel::SendError<String>),
+    #[error(transparent)]
+    Bus(#[from] bus::Error),
+    #[error("No handler found for MQTT message {0:?}")]
+    NoHandler(MqttMsg),
+    #[error(transparent)]
+    Device(#[from] device::Error),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
-
-pub fn bool2str<N: Into<u32>>(n: N) -> &'static str {
-    match n.into() {
-        0 => "0",
-        _ => "1",
-    }
-}
-
-pub fn str2bool(s: &str) -> bool {
-    matches!(s, "0")
-}
-
-pub fn float2centi(f: f32) -> u32 {
-    (f * 100.) as u32
-}
-
-pub fn centi2float(c: u32) -> f32 {
-    (c as f32) / 100.
-}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeviceInfo {
@@ -61,7 +48,7 @@ impl DeviceInfo {
     /// Format MQTT message topic relating to this device
     pub fn fmt(&self, args: fmt::Arguments) -> String {
         format!(
-            "ESERA/{}/{}/{}",
+            "ESERA/{}/{}{}",
             self.contno,
             self.name.as_ref().unwrap_or(&self.busid),
             args
@@ -70,7 +57,7 @@ impl DeviceInfo {
 
     /// Format MQTT message topic relating to this device
     pub fn topic<S: AsRef<str>>(&self, item: S) -> String {
-        self.fmt(format_args!("{}", item.as_ref()))
+        self.fmt(format_args!("/{}", item.as_ref()))
     }
 
     /// Creates list of busaddrs from busid and list of subaddresses
@@ -80,33 +67,39 @@ impl DeviceInfo {
             .map(|i| format!("{}_{}", self.busid, i))
             .collect()
     }
+
+    /// Returns bare device number as &str (e.g., "3" for "OWD3"). Non-OWD addrs will be returned
+    /// unmodified (e.g., "SYS").
+    pub fn devno(&self) -> &str {
+        self.busid.strip_prefix("OWD").unwrap_or(&self.busid)
+    }
 }
 
 /// Result datatype which may contain both mqtt messages and controller commands.
-pub struct TwoWay<'a> {
+pub struct TwoWay {
     pub mqtt: Vec<MqttMsg>,
-    pub ow: Box<dyn Iterator<Item = String> + 'a>,
+    pub ow: Vec<String>,
 }
 
-impl<'a> TwoWay<'a> {
-    pub fn new<I: IntoIterator<Item = String> + 'a>(msgs: Vec<MqttMsg>, cmds: I) -> Self {
+impl TwoWay {
+    pub fn new(msgs: Vec<MqttMsg>, cmds: Vec<String>) -> Self {
         Self {
             mqtt: msgs,
-            ow: Box::new(cmds.into_iter()),
+            ow: cmds,
         }
     }
 
-    pub fn from_1wire<I: IntoIterator<Item = String> + 'a>(cmds: I) -> Self {
+    pub fn from_1wire<S: Into<String>>(cmd: S) -> Self {
         Self {
             mqtt: Vec::default(),
-            ow: Box::new(cmds.into_iter()),
+            ow: vec![cmd.into()],
         }
     }
 
     pub fn from_mqtt(msg: MqttMsg) -> Self {
         Self {
             mqtt: vec![msg],
-            ow: Box::new(iter::empty()),
+            ow: Vec::default(),
         }
     }
 
@@ -134,20 +127,31 @@ impl<'a> TwoWay<'a> {
     }
 }
 
-impl<'a> From<Vec<MqttMsg>> for TwoWay<'a> {
+impl iter::FromIterator<TwoWay> for TwoWay {
+    fn from_iter<I: IntoIterator<Item = TwoWay>>(iter: I) -> Self {
+        let mut res = Self::default();
+        for elem in iter {
+            res.mqtt.extend(elem.mqtt);
+            res.ow.extend(elem.ow)
+        }
+        res
+    }
+}
+
+impl From<Vec<MqttMsg>> for TwoWay {
     fn from(msgs: Vec<MqttMsg>) -> Self {
         Self {
             mqtt: msgs,
-            ow: Box::new(iter::empty()),
+            ow: Vec::default(),
         }
     }
 }
 
-impl<'a> Default for TwoWay<'a> {
+impl Default for TwoWay {
     fn default() -> Self {
         Self {
             mqtt: Vec::default(),
-            ow: Box::new(iter::empty()),
+            ow: Vec::default(),
         }
     }
 }

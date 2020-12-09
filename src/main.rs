@@ -10,7 +10,9 @@ use std::thread;
 use std::time::Duration;
 use structopt::StructOpt;
 
-use esera_mqtt::{ControllerConnection, ControllerError, MqttConnection, Response, Universe};
+use esera_mqtt::{
+    ControllerConnection, ControllerError, Error, MqttConnection, Response, Universe,
+};
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -102,7 +104,7 @@ fn run(opt: Opt) -> Result<()> {
                 match op.recv(&ctrl_receivers[i]) {
                     Ok(Ok(resp)) => {
                         universe
-                            .handle_1wire(resp)?
+                            .handle_1wire(resp, i)?
                             .send(&mut mqtt, &ctrl_senders[i])?;
                     }
                     Ok(Err(e)) => error!("{}", e),
@@ -110,7 +112,11 @@ fn run(opt: Opt) -> Result<()> {
                 };
             }
             i if i == mqtt_idx => match op.recv(&mqtt_chan) {
-                Ok(_msg) => todo!("handle incoming mqtt"),
+                Ok(msg) => match universe.handle_mqtt(msg) {
+                    Ok((res, i)) => res.send(&mut mqtt, &ctrl_senders[i])?,
+                    Err(e @ Error::NoHandler(_)) => debug!("{}", e),
+                    Err(e) => error!("{}", e),
+                },
                 Err(_) => break, // channel closed
             },
             _ => panic!("BUG: unknown select() channel indexed"),
