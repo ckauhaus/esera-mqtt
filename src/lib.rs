@@ -46,7 +46,7 @@ pub struct DeviceInfo {
 
 impl DeviceInfo {
     /// Format MQTT message topic relating to this device
-    pub fn fmt(&self, args: fmt::Arguments) -> String {
+    fn fmt(&self, args: fmt::Arguments) -> String {
         format!(
             "ESERA/{}/{}{}",
             self.contno,
@@ -76,6 +76,7 @@ impl DeviceInfo {
 }
 
 /// Result datatype which may contain both mqtt messages and controller commands.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TwoWay {
     pub mqtt: Vec<MqttMsg>,
     pub ow: Vec<String>,
@@ -138,6 +139,23 @@ impl iter::FromIterator<TwoWay> for TwoWay {
     }
 }
 
+impl std::ops::Add for TwoWay {
+    type Output = TwoWay;
+
+    fn add(mut self, rhs: Self) -> Self {
+        self.mqtt.extend(rhs.mqtt);
+        self.ow.extend(rhs.ow);
+        self
+    }
+}
+
+impl std::ops::AddAssign for TwoWay {
+    fn add_assign(&mut self, rhs: Self) {
+        self.mqtt.extend(rhs.mqtt);
+        self.ow.extend(rhs.ow);
+    }
+}
+
 impl From<Vec<MqttMsg>> for TwoWay {
     fn from(msgs: Vec<MqttMsg>) -> Self {
         Self {
@@ -147,11 +165,20 @@ impl From<Vec<MqttMsg>> for TwoWay {
     }
 }
 
-impl Default for TwoWay {
-    fn default() -> Self {
-        Self {
-            mqtt: Vec::default(),
-            ow: Vec::default(),
-        }
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn add_twoway() {
+        let t1 = TwoWay::new(vec![MqttMsg::new("topic", "msg1")], vec!["CMD1".into()]);
+        let t2 = TwoWay::new(vec![MqttMsg::new("topic", "msg2")], vec!["CMD2".into()]);
+        assert_eq!(
+            t1 + t2,
+            TwoWay::new(
+                vec![MqttMsg::new("topic", "msg1"), MqttMsg::new("topic", "msg2")],
+                vec!["CMD1".into(), "CMD2".into()]
+            )
+        );
     }
 }

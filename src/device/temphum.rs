@@ -9,58 +9,17 @@ pub struct TempHum {
 
 impl TempHum {
     new!(TempHum);
+
+    fn disc_topic(&self, sub: &str) -> String {
+        format!(
+            "homeassistant/sensor/{}/{}_{}/config",
+            self.info.contno, self.info.serno, sub
+        )
+    }
 }
 
 impl Device for TempHum {
     std_methods!(TempHum);
-
-    fn init(&self) -> TwoWay {
-        let dev = json!({
-            "identifiers": [self.info.serno],
-            "model": self.model(),
-            "name": self.name()
-        });
-        TwoWay::new(
-            vec![
-                MqttMsg::new(
-                    format!(
-                        "homeassistant/sensor/{}/{}_temp/config",
-                        self.info.contno, self.info.serno
-                    ),
-                    serde_json::to_string(&json!({
-                        "~": self.info.fmt(format_args!("")),
-                        "device": &dev,
-                        "name": format!("{}_temp", self.name()),
-                        "unique_id": format!("{}_temp", self.info.serno),
-                        "availability_topic": "~/status",
-                        "status_topic": "~/temp",
-                        "device_class": "temperature",
-                        "unit_of_measurement": "°C"
-                    }))
-                    .unwrap(),
-                ),
-                MqttMsg::new(
-                    format!(
-                        "homeassistant/sensor/{}/{}_hum/config",
-                        self.info.contno, self.info.serno
-                    ),
-                    serde_json::to_string(&json!({
-                        "~": self.info.fmt(format_args!("")),
-                        "device": &dev,
-                        "name": format!("{}_hum", self.info.name.as_ref().unwrap_or(&self.info.busid)),
-                        "unique_id": format!("{}_hum", self.info.serno),
-                        "availability_topic": "~/status",
-                        "status_topic": "~/hum",
-                        "device_class": "humidity",
-                        "unit_of_measurement": "%"
-                    }))
-                    .unwrap(),
-                ),
-                MqttMsg::new(self.info.topic("status"), self.info.status),
-            ],
-            vec![],
-        )
-    }
 
     fn register_1wire(&self) -> Vec<String> {
         self.info.mkbusaddrs(&[1, 3, 4])
@@ -74,7 +33,6 @@ impl Device for TempHum {
                 "4" => TwoWay::mqtt(self.info.topic("dew"), centi2float(s.val)),
                 other => panic!("BUG: Unknown busaddr {}", other),
             },
-            Response::OWDStatus(os) => self.handle_status(os.status),
             _ => {
                 warn!("[{}] TempHum: no handler for {:?}", self.info.contno, resp);
                 TwoWay::default()
@@ -82,11 +40,38 @@ impl Device for TempHum {
         })
     }
 
+    fn announce(&self) -> Vec<MqttMsg> {
+        let dev = self.announce_device();
+        let mut res = Vec::with_capacity(3);
+        for (name, short, class, uom) in &[
+            ("Temperature", "temp", "temperature", "°C"),
+            ("Humidity", "hum", "humidity", "%"),
+            ("Dewpoint", "dew", "temperature", "°C"),
+        ] {
+            res.push(MqttMsg::new(
+                self.disc_topic(short),
+                serde_json::to_string(&json!({
+                    "availability_topic": self.info.topic("status"),
+                    "device": &dev,
+                    "device_class": class,
+                    "expire_after": 600,
+                    "name": format!("{} {}", self.name(), name),
+                    "unique_id": format!("{}_{}", self.info.serno, short),
+                    "state_topic": self.info.topic(short),
+                    "unit_of_measurement": uom
+                }))
+                .unwrap(),
+            ));
+        }
+        res
+    }
+
     fn register_mqtt(&self) -> Vec<(String, Token)> {
         vec![
             (self.info.topic("temp"), -1),
             (self.info.topic("hum"), -1),
             (self.info.topic("dew"), -1),
+            (self.info.topic("status"), -1),
         ]
     }
 

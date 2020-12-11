@@ -26,7 +26,6 @@ impl Device for AirQuality {
                 "5" => TwoWay::mqtt(self.info.topic("co2"), centi2float(s.val)),
                 other => panic!("BUG: Unknown busaddr {}", other),
             },
-            Response::OWDStatus(os) => self.handle_status(os.status),
             _ => {
                 warn!(
                     "[{}] AirQuality: no handler for {:?}",

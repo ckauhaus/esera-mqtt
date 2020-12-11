@@ -2,6 +2,7 @@ use crate::bus::Token;
 use crate::{DeviceInfo, MqttMsg, Response, Status, TwoWay};
 
 use enum_dispatch::enum_dispatch;
+use serde::Serialize;
 use std::fmt;
 use thiserror::Error;
 
@@ -13,55 +14,87 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Default, Debug, Clone, PartialEq, Serialize)]
+pub struct AnnounceDevice {
+    identifiers: Vec<String>,
+    model: String,
+    name: String,
+    manufacturer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sw_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    via_device: Option<String>,
+}
+
 #[enum_dispatch]
 pub trait Device {
+    /// Generated via [`std_methods`].
     fn info(&self) -> &DeviceInfo;
 
+    /// Generated via [`std_methods`].
     fn info_mut(&mut self) -> &mut DeviceInfo;
 
+    /// Generic model type like "Controller2". Generated via [`std_methods`].
     fn model(&self) -> &'static str;
 
+    /// Human readable name. Falls back to OWD id if none set.
     fn name(&self) -> &str {
         self.info().name.as_ref().unwrap_or(&self.info().busid)
     }
 
+    /// Whether this device is internally configured or not. Should be generally true.
     fn configured(&self) -> bool {
         // overridden in [`Model::Unknown`]
         true
+    }
+
+    /// Initializes device. This involved setting custom struct fields or issueing commands to the
+    /// 1-Wire device. 1-Wire responses to initialization commands must be processed via
+    /// [`handle_1wire`].
+    fn init(&mut self) -> Vec<String> {
+        Vec::default()
+    }
+
+    /// Announces device discovery data via MQTT.
+    fn announce(&self) -> Vec<MqttMsg> {
+        vec![MqttMsg::new(
+            self.info().topic("status"),
+            self.info().status,
+        )]
+    }
+
+    /// Helper to create (largely constant) device data in announcements. Override for controllers.
+    fn announce_device(&self) -> AnnounceDevice {
+        AnnounceDevice {
+            identifiers: vec![self.info().serno.clone()],
+            model: format!("{} {}", self.model(), self.info().artno),
+            name: format!("1-Wire bus {}/{}", self.info().contno, self.name()),
+            manufacturer: "ESERA".into(),
+            sw_version: None,
+            // Assume that we have exclusively Controller2. Needs to be generalized in case
+            // several controller types are in use.
+            via_device: Some(format!("1-Wire {}/Controller2", self.info().contno)),
+        }
+    }
+
+    /// Processes status updates from 1-Wire list results.
+    fn set_status(&mut self, new: Status) -> TwoWay {
+        self.info_mut().status = new;
+        TwoWay::mqtt(self.info().topic("status"), new)
     }
 
     /// Returns list of 1-Wire busaddrs (e.g., OWD14_1) for which events should be routed to this
     /// component.
     fn register_1wire(&self) -> Vec<String>;
 
-    /// Issue initialization commands sent to the device. Possible answers must be handled via
-    /// [`handle_1wire`]. Additionally issue initial MQTT stuff.
-    fn init(&self) -> TwoWay {
-        TwoWay::mqtt(self.info().topic("status"), self.info().status)
-    }
-
-    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
-        Ok(match resp {
-            Response::OWDStatus(os) => self.handle_status(os.status),
-            _ => TwoWay::default(),
-        })
-    }
-
-    fn handle_status(&mut self, new: Status) -> TwoWay {
-        self.info_mut().status = new;
-        TwoWay::mqtt(self.info().topic("status"), new)
-    }
+    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay>;
 
     /// Returns a list of topics which should be handled by this device. Each topic is assiociated
     /// with an opaque token which helps during event processing to associate the message to the
     /// registered topic.
-    fn register_mqtt(&self) -> Vec<(String, Token)> {
-        Vec::new()
-    }
+    fn register_mqtt(&self) -> Vec<(String, Token)>;
 
-    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay> {
-        Ok(TwoWay::default())
-    }
+    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay>;
 }
 
 macro_rules! new {
@@ -113,6 +146,19 @@ fn float2centi(f: f32) -> u32 {
 
 fn centi2float(c: u32) -> f32 {
     (c as f32) / 100.
+}
+
+fn disc_topic(typ: &str, info: &DeviceInfo, sub: fmt::Arguments) -> String {
+    format!(
+        "homeassistant/{}/{}/{}_{}/config",
+        typ,
+        info.contno,
+        info.serno.replace(
+            |c: char| { !c.is_ascii_alphanumeric() && c != '_' && c != '-' },
+            ""
+        ),
+        sub
+    )
 }
 
 fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: u32) -> TwoWay {
@@ -172,7 +218,7 @@ impl fmt::Display for Model {
         let info = self.info();
         write!(
             f,
-            "[{}] {:-5} {:-13} ({}) S/N {} ",
+            "[{}] {:-5} {:-13} ({}) S/N {:-17} ",
             info.contno,
             info.busid,
             self.model(),
@@ -208,5 +254,17 @@ impl Device for Unknown {
 
     fn register_1wire(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn handle_1wire(&mut self, _resp: Response) -> Result<TwoWay> {
+        Ok(TwoWay::default())
+    }
+
+    fn register_mqtt(&self) -> Vec<(String, Token)> {
+        Vec::default()
+    }
+
+    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay> {
+        Ok(TwoWay::default())
     }
 }

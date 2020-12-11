@@ -1,5 +1,3 @@
-// XXX ESERA/+/status for controller with birth message and last will (online/offline)
-
 use crossbeam::channel::{self, Receiver, Sender};
 use rumqttc::{ConnectReturnCode, Event, MqttOptions, Packet, QoS};
 use std::fmt;
@@ -25,8 +23,14 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MqttMsg {
-    Pub { topic: String, payload: String },
-    Sub { topic: String },
+    Pub {
+        topic: String,
+        payload: String,
+        retain: bool,
+    },
+    Sub {
+        topic: String,
+    },
 }
 
 impl MqttMsg {
@@ -34,6 +38,15 @@ impl MqttMsg {
         Self::Pub {
             topic: topic.into(),
             payload: payload.to_string(),
+            retain: false,
+        }
+    }
+
+    pub fn retain<S: Into<String>, P: ToString>(topic: S, payload: P) -> Self {
+        Self::Pub {
+            topic: topic.into(),
+            payload: payload.to_string(),
+            retain: true,
         }
     }
 
@@ -95,7 +108,7 @@ fn process_packet(pck: Packet, tx: &Sender<MqttMsg>) -> Result<()> {
     match pck {
         Packet::Publish(p) => {
             let msg = MqttMsg::new(p.topic, String::from_utf8(p.payload.to_vec())?);
-            debug!("=== {:?}", msg);
+            debug!("==< {:?}", msg);
             tx.send(msg).map_err(Error::from)
         }
         Packet::Disconnect => Err(Error::Disconnected),
@@ -139,12 +152,16 @@ impl MqttConnection {
     }
 
     pub fn send(&mut self, msg: MqttMsg) -> Result<()> {
+        debug!("==> {:?}", msg);
         Ok(match msg {
-            MqttMsg::Pub { topic, payload } => {
-                self.client
-                    .publish(topic, QoS::AtLeastOnce, false, payload.as_bytes())?
-            }
-            MqttMsg::Sub { topic } => self.client.subscribe(topic, QoS::AtLeastOnce)?,
+            MqttMsg::Pub {
+                topic,
+                payload,
+                retain,
+            } => self
+                .client
+                .publish(topic, QoS::AtMostOnce, retain, payload.as_bytes())?,
+            MqttMsg::Sub { topic } => self.client.subscribe(topic, QoS::AtMostOnce)?,
         })
     }
 }

@@ -3,7 +3,7 @@ extern crate log;
 
 use anyhow::{Context, Result};
 use crossbeam::channel::{self, Receiver, Sender};
-use rumqttc::MqttOptions;
+use rumqttc::{LastWill, MqttOptions, QoS};
 use std::fmt;
 use std::net::ToSocketAddrs;
 use std::thread;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use structopt::StructOpt;
 
 use esera_mqtt::{
-    ControllerConnection, ControllerError, Error, MqttConnection, Response, Universe,
+    ControllerConnection, ControllerError, Error, MqttConnection, MqttMsg, Response, Universe,
 };
 
 #[derive(StructOpt, Debug)]
@@ -87,6 +87,12 @@ fn run(opt: Opt) -> Result<()> {
     }
 
     let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
+    mqtt_opt.set_last_will(LastWill {
+        topic: "ESERA/status".into(),
+        message: "offline".into(),
+        qos: QoS::AtMostOnce,
+        retain: true,
+    });
     let mut parts = opt.mqtt_cred.splitn(2, ':');
     match (parts.next(), parts.next()) {
         (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
@@ -94,6 +100,7 @@ fn run(opt: Opt) -> Result<()> {
         _ => &mut mqtt_opt,
     };
     let (mut mqtt, mqtt_chan) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
+    mqtt.send(MqttMsg::retain("ESERA/status", "online"))?;
     let mqtt_idx = sel.recv(&mqtt_chan);
 
     debug!("Entering main event loop");

@@ -1,5 +1,7 @@
-use super::{digital_io, str2bool, Result, Token};
+use super::{digital_io, disc_topic, str2bool, Result, Token};
 use crate::{Device, DeviceInfo, MqttMsg, Response, TwoWay};
+
+use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Switch8 {
@@ -27,12 +29,55 @@ impl Device for Switch8 {
                     other => panic!("BUG: Unknown busaddr {}", other),
                 }
             }
-            Response::OWDStatus(os) => self.handle_status(os.status),
             _ => {
                 warn!("[{}] Switch8: no handler for {:?}", self.info.contno, resp);
                 TwoWay::default()
             }
         })
+    }
+
+    fn announce(&self) -> Vec<MqttMsg> {
+        let mut res = Vec::with_capacity(20);
+        let dev = self.announce_device();
+        let trigger = |ch, dir, pl| {
+            MqttMsg::new(
+                disc_topic(
+                    "device_automation",
+                    &self.info,
+                    format_args!("button_{}_{}", ch, dir),
+                ),
+                serde_json::to_string(&json!({
+                    "device": &dev,
+                    "automation_type": "trigger",
+                    "payload": pl,
+                    "topic": self.info.fmt(format_args!("/in/ch{}", ch)),
+                    "type": format!("button_short_{}", dir),
+                    "subtype": format!("button_{}", ch)
+                }))
+                .unwrap(),
+            )
+        };
+        for ch in 1..=8 {
+            for (dir, pl) in &[("press", "1"), ("release", "0")] {
+                res.push(trigger(ch, dir, pl));
+            }
+            res.push(MqttMsg::new(
+                disc_topic("switch", &self.info, format_args!("ch{}", ch)),
+                serde_json::to_string(&json!({
+                        "availability_topic": self.info.topic("status"),
+                        "command_topic": self.info.fmt(format_args!("/set/ch{}", ch)),
+                        "state_topic": self.info.fmt(format_args!("/out/ch{}", ch)),
+                        "device": dev,
+                        "name": format!("Switch {}.{} out {}", self.info.contno, self.name(), ch),
+                        "payload_on": "1",
+                        "payload_off": "0",
+                        "unique_id": format!("{}_ch{}", self.info.serno, ch)
+                    }
+                ))
+                .unwrap(),
+            ));
+        }
+        res
     }
 
     fn register_mqtt(&self) -> Vec<(String, Token)> {
