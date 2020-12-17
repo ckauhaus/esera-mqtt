@@ -60,6 +60,10 @@ impl DeviceInfo {
         self.fmt(format_args!("/{}", item.as_ref()))
     }
 
+    pub fn mqtt_msg<S: AsRef<str>, P: ToString>(&self, topic: S, value: P) -> MqttMsg {
+        MqttMsg::new(self.topic(topic), value)
+    }
+
     /// Creates list of busaddrs from busid and list of subaddresses
     pub fn mkbusaddrs(&self, addrs: &[u8]) -> Vec<String> {
         addrs
@@ -104,17 +108,11 @@ impl TwoWay {
         }
     }
 
-    pub fn mqtt<T: Into<String>, S: ToString>(topic: T, payload: S) -> Self {
-        Self::from_mqtt(MqttMsg::new(topic, payload))
-    }
-
-    pub fn push_mqtt<S: ToString>(
-        &mut self,
-        devinfo: &DeviceInfo,
-        detail: fmt::Arguments,
-        payload: S,
-    ) {
-        self.mqtt.push(MqttMsg::new(devinfo.fmt(detail), payload))
+    pub fn mqtt(msgs: Vec<MqttMsg>) -> Self {
+        Self {
+            mqtt: msgs,
+            ow: Vec::default(),
+        }
     }
 
     pub fn send(self, mqtt: &mut MqttConnection, ctrl: &channel::Sender<String>) -> Result<()> {

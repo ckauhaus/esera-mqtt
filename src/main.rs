@@ -49,7 +49,7 @@ where
             Err(e) => error!("[{}] Controller event loop died: {}", c.contno, e),
         }
         warn!("Reconnecting to {:?}", &addr);
-        while let Err(e) = c.connect(addr.clone()) {
+        while let Err(e) = c.reconnect(addr.clone()) {
             error!("[{}] Reconnect failed: {}", c.contno, e);
             info!("Retrying in 5s...");
             thread::sleep(Duration::new(5, 0));
@@ -86,7 +86,8 @@ fn run(opt: Opt) -> Result<()> {
         sel.recv(&down);
     }
 
-    let mut mqtt_opt = MqttOptions::new("esera-mqtt", opt.mqtt_host.clone(), 1883);
+    let client = format!("esera_mqtt.{}", std::process::id());
+    let mut mqtt_opt = MqttOptions::new(&client, opt.mqtt_host.clone(), 1883);
     mqtt_opt.set_last_will(LastWill {
         topic: "ESERA/status".into(),
         message: "offline".into(),

@@ -50,6 +50,7 @@ impl Device for Switch8 {
                     "device": &dev,
                     "automation_type": "trigger",
                     "payload": pl,
+                    "qos": 1,
                     "topic": self.info.fmt(format_args!("/in/ch{}", ch)),
                     "type": format!("button_short_{}", dir),
                     "subtype": format!("button_{}", ch)
@@ -68,10 +69,11 @@ impl Device for Switch8 {
                         "command_topic": self.info.fmt(format_args!("/set/ch{}", ch)),
                         "state_topic": self.info.fmt(format_args!("/out/ch{}", ch)),
                         "device": dev,
-                        "name": format!("Switch {}.{} out {}", self.info.contno, self.name(), ch),
+                        "name": format!("Switch {}/{} out {}", self.info.contno, self.name(), ch),
                         "payload_on": "1",
                         "payload_off": "0",
-                        "unique_id": format!("{}_ch{}", self.info.serno, ch)
+                        "unique_id": format!("{}_ch{}", self.info.serno, ch),
+                        "qos": 1,
                     }
                 ))
                 .unwrap(),
@@ -81,11 +83,9 @@ impl Device for Switch8 {
     }
 
     fn register_mqtt(&self) -> Vec<(String, Token)> {
-        let mut t = Vec::with_capacity(24);
+        let mut t = Vec::with_capacity(8);
         for i in 1..=8 {
             t.push((self.info.fmt(format_args!("/set/ch{}", i)), i - 1));
-            t.push((self.info.fmt(format_args!("/out/ch{}", i)), -1));
-            t.push((self.info.fmt(format_args!("/in/ch{}", i)), -1));
         }
         t
     }

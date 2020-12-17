@@ -61,7 +61,7 @@ impl Universe {
             if slot.info().serno != dev.serno {
                 *slot = Model::select(dev);
             }
-            res += slot.set_status(status);
+            res += TwoWay::mqtt(slot.set_status(status));
         }
         info!("{}", self.bus[c]);
         self.bus[c].register_1wire();
@@ -118,6 +118,7 @@ impl Universe {
     /// the latter to.
     pub fn handle_mqtt(&mut self, msg: MqttMsg) -> Result<(TwoWay, usize), crate::Error> {
         if let Some((bus, dev, tok)) = self.route(&msg.topic()) {
+            info!("MQTT event: {}", msg);
             let i = bus.connection_idx;
             return dev.handle_mqtt(msg, tok).map(|res| Ok((res, i)))?;
         }
@@ -184,7 +185,11 @@ impl Bus {
         self.devices
             .iter()
             .filter(|m| m.configured())
-            .flat_map(|d| d.announce())
+            .flat_map(|d| {
+                let mut msgs = d.announce();
+                msgs.extend(d.get_status());
+                msgs
+            })
             .collect()
     }
 

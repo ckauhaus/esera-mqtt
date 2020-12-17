@@ -82,6 +82,25 @@ impl MqttMsg {
     }
 }
 
+impl fmt::Display for MqttMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pub {
+                topic,
+                payload,
+                retain,
+            } => write!(
+                f,
+                "{} {}{}",
+                topic,
+                payload,
+                if *retain { " (retain)" } else { "" }
+            ),
+            Self::Sub { topic } => write!(f, "Subscribe {}", topic),
+        }
+    }
+}
+
 fn mqtt_recv_loop(host: String, mut conn: rumqttc::Connection, tx: Sender<MqttMsg>) {
     std::thread::Builder::new()
         .name("MQTT reader".into())
@@ -97,7 +116,7 @@ fn mqtt_recv_loop(host: String, mut conn: rumqttc::Connection, tx: Sender<MqttMs
                         Ok(_) => (),
                     },
                     Ok(Event::Outgoing(_)) => (),
-                    Err(e) => error!("MQTT: {}", e),
+                    Err(e) => error!("{}", e),
                 }
             }
         })
@@ -124,7 +143,7 @@ pub struct MqttConnection {
 impl MqttConnection {
     pub fn new(host: &str, opt: MqttOptions) -> Result<(Self, Receiver<MqttMsg>)> {
         let host = host.to_owned();
-        let (client, mut conn) = rumqttc::Client::new(opt, 100);
+        let (client, mut conn) = rumqttc::Client::new(opt, 10);
         let mut success = false;
         for item in conn.iter().take(3) {
             match item {

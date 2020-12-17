@@ -10,6 +10,8 @@ use thiserror::Error;
 pub enum Error {
     #[error("Value out of range: {0:?}")]
     Value(String),
+    #[error("Invalid bus id: {0}")]
+    BusId(String, #[source] std::num::ParseIntError),
 }
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -57,10 +59,7 @@ pub trait Device {
 
     /// Announces device discovery data via MQTT.
     fn announce(&self) -> Vec<MqttMsg> {
-        vec![MqttMsg::new(
-            self.info().topic("status"),
-            self.info().status,
-        )]
+        vec![]
     }
 
     /// Helper to create (largely constant) device data in announcements. Override for controllers.
@@ -78,9 +77,15 @@ pub trait Device {
     }
 
     /// Processes status updates from 1-Wire list results.
-    fn set_status(&mut self, new: Status) -> TwoWay {
+    fn set_status(&mut self, new: Status) -> Vec<MqttMsg> {
         self.info_mut().status = new;
-        TwoWay::mqtt(self.info().topic("status"), new)
+        self.get_status()
+    }
+
+    /// Returns MQTT message announcing the device status
+    fn get_status(&self) -> Vec<MqttMsg> {
+        let info = self.info();
+        vec![MqttMsg::retain(info.topic("status"), info.status)]
     }
 
     /// Returns list of 1-Wire busaddrs (e.g., OWD14_1) for which events should be routed to this
@@ -92,9 +97,13 @@ pub trait Device {
     /// Returns a list of topics which should be handled by this device. Each topic is assiociated
     /// with an opaque token which helps during event processing to associate the message to the
     /// registered topic.
-    fn register_mqtt(&self) -> Vec<(String, Token)>;
+    fn register_mqtt(&self) -> Vec<(String, Token)> {
+        Vec::default()
+    }
 
-    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay>;
+    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay> {
+        Ok(TwoWay::default())
+    }
 }
 
 macro_rules! new {
@@ -164,11 +173,10 @@ fn disc_topic(typ: &str, info: &DeviceInfo, sub: fmt::Arguments) -> String {
 fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: u32) -> TwoWay {
     let mut res = TwoWay::default();
     for bit in 0..n {
-        res.push_mqtt(
-            info,
-            format_args!("/{}/ch{}", inout, bit + 1),
+        res += TwoWay::from_mqtt(MqttMsg::new(
+            info.fmt(format_args!("/{}/ch{}", inout, bit + 1)),
             bool2str(val & (1 << bit)),
-        )
+        ))
     }
     res
 }
@@ -176,12 +184,10 @@ fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: u32) -> TwoWa
 mod airquality;
 mod controller2;
 mod switch8;
-mod temphum;
 
-use airquality::AirQuality;
+use airquality::{AirQuality, TempHum};
 use controller2::Controller2;
 use switch8::Switch8;
-use temphum::TempHum;
 
 #[enum_dispatch(Device)]
 #[derive(Clone, Debug, PartialEq)]

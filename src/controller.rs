@@ -51,8 +51,7 @@ impl ControllerConnection<TcpStream> {
         Ok(c)
     }
 
-    // XXX rename to reconnect
-    pub fn connect<A: ToSocketAddrs>(&mut self, addr: A) -> Result<()> {
+    pub fn reconnect<A: ToSocketAddrs>(&mut self, addr: A) -> Result<()> {
         let addr: Vec<_> = addr.to_socket_addrs()?.collect();
         info!("Connecting to 1-Wire controller at {:?}", addr);
         let stream = TcpStream::connect(&*addr)?;
