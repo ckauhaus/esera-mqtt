@@ -61,7 +61,9 @@ impl Universe {
             if slot.info().serno != dev.serno {
                 *slot = Model::select(dev);
             }
-            res += TwoWay::mqtt(slot.set_status(status));
+            if slot.configured() {
+                res += TwoWay::mqtt(slot.set_status(status));
+            }
         }
         info!("{}", self.bus[c]);
         self.bus[c].register_1wire();

@@ -111,8 +111,10 @@ where
     /// Writes a single line to the underlaying stream. Newline will be appended.
     pub fn send_line<L: Into<String>>(&self, line: L) -> Result<(), std::io::Error> {
         let mut line = line.into();
-        line.push_str("\r\n");
         debug!("[{}] >>> {}", self.contno, line.trim());
+        if !line.ends_with("\r\n") {
+            line.push_str("\r\n");
+        }
         let mut w = self.writer.lock();
         w.write_all(line.as_bytes())?;
         w.flush()
@@ -139,7 +141,7 @@ where
 
     pub fn get(&self) -> Option<Result<Response>> {
         while self.queue.lock().is_empty() {
-            thread::sleep(Duration::from_millis(25));
+            thread::sleep(Duration::from_millis(10));
             match self.receive() {
                 Ok(true) => (),
                 Ok(false) => return None,
@@ -178,7 +180,7 @@ macro_rules! pick {
                     }
                 }
                 // item not already present in queue, wait for more data
-                std::thread::sleep(Duration::from_millis(25));
+                std::thread::sleep(Duration::from_millis(10));
                 match $conn.receive() {
                     Ok(true) => (),
                     Ok(false) => break Err(Error::Disconnected),
@@ -203,43 +205,51 @@ where
     pub fn event_loop(&self, up: Receiver<String>, down: Sender<Result<Response>>) -> Result<()> {
         let done = AtomicCell::new(false);
         crossbeam::scope(|sc| {
-            sc.builder()
-                .name("reader".into())
-                .spawn(|_| {
-                    while let Some(item) = self.get() {
-                        if down.send(item).is_err() {
-                            // channel closed
-                            done.store(true);
-                            return;
+            let hdl = vec![
+                sc.builder()
+                    .name("reader".into())
+                    .spawn(|_| {
+                        while let Some(item) = self.get() {
+                            if down.send(item).is_err() {
+                                // channel closed
+                                done.store(true);
+                                return Ok(());
+                            }
+                            if done.load() {
+                                // other thread has exited
+                                return Ok(());
+                            }
                         }
-                        if done.load() {
-                            return;
+                        warn!("[{}] Controller connection unexpectly lost", self.contno);
+                        done.store(true);
+                        Err(Error::Disconnected)
+                    })
+                    .unwrap(),
+                sc.builder()
+                    .name("writer".into())
+                    .spawn(|_| {
+                        while let Ok(line) = up.recv() {
+                            if let Err(e) = self.send_line(line) {
+                                error!("[{}] Cannot send controller event: {}", self.contno, e);
+                                done.store(true);
+                                return Err(Error::Disconnected);
+                            }
+                            if done.load() {
+                                // other thread has exited
+                                return Ok(());
+                            }
                         }
-                    }
-                    // underlying transport closed
-                    warn!("[{}] Controller connection unexpectly lost", self.contno);
-                    done.store(true);
-                })
-                .unwrap();
-            sc.builder()
-                .name("writer".into())
-                .spawn(|_| {
-                    while let Ok(line) = up.recv() {
-                        if let Err(e) = self.send_line(line) {
-                            error!("[{}] Cannot send controller event: {}", self.contno, e);
-                            done.store(true);
-                            return;
-                        }
-                        if done.load() {
-                            return;
-                        }
-                    }
-                    done.store(true)
-                })
-                .unwrap();
+                        done.store(true);
+                        // channel closed
+                        Ok(())
+                    })
+                    .unwrap(),
+            ];
+            hdl.into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Result<_>>()
         })
-        .unwrap();
-        Ok(())
+        .unwrap()
     }
 }
 

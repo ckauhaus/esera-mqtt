@@ -183,6 +183,12 @@ impl MqttConnection {
             MqttMsg::Sub { topic } => self.client.subscribe(topic, QoS::AtMostOnce)?,
         })
     }
+
+    pub fn subscribe(&mut self, topic: &str) -> Result<()> {
+        self.client
+            .subscribe(topic, QoS::AtMostOnce)
+            .map_err(|e| Error::Subscribe(topic.into(), e))
+    }
 }
 
 impl fmt::Debug for MqttConnection {

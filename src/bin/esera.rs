@@ -29,7 +29,7 @@ struct Opt {
     #[structopt(short = "H", long, default_value = "localhost")]
     mqtt_host: String,
     /// MQTT credentials (username:password)
-    #[structopt(short = "c", long, default_value = "", env = "MQTT_CRED")]
+    #[structopt(short = "C", long, default_value = "", env = "MQTT_CRED")]
     mqtt_cred: String,
 }
 
@@ -54,6 +54,8 @@ where
             info!("Retrying in 5s...");
             thread::sleep(Duration::new(5, 0));
         }
+        down_tx.send(c.csi().map(|c| Response::CSI(c))).ok();
+        down_tx.send(c.list().map(|l| Response::List3(l))).ok();
     });
     Ok((up_tx, down_rx))
 }
@@ -137,10 +139,8 @@ fn main() {
     env_logger::init();
     let opt = Opt::from_args();
     info!("Connecting to MQTT broker at {}", opt.mqtt_host);
-    std::process::exit(if let Err(e) = run(opt) {
+    if let Err(e) = run(opt) {
         error!("FATAL: {}", e);
-        1
-    } else {
-        0
-    })
+        std::process::exit(1)
+    }
 }

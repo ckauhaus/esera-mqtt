@@ -18,14 +18,14 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize)]
 pub struct AnnounceDevice {
-    identifiers: Vec<String>,
-    model: String,
-    name: String,
-    manufacturer: String,
+    pub identifiers: Vec<String>,
+    pub model: String,
+    pub name: String,
+    pub manufacturer: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sw_version: Option<String>,
+    pub sw_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    via_device: Option<String>,
+    pub via_device: Option<String>,
 }
 
 #[enum_dispatch]
@@ -65,7 +65,7 @@ pub trait Device {
     /// Helper to create (largely constant) device data in announcements. Override for controllers.
     fn announce_device(&self) -> AnnounceDevice {
         AnnounceDevice {
-            identifiers: vec![self.info().serno.clone()],
+            identifiers: vec![self.info().serno.clone(), self.name().into()],
             model: format!("{} {}", self.model(), self.info().artno),
             name: format!("1-Wire bus {}/{}", self.info().contno, self.name()),
             manufacturer: "ESERA".into(),
@@ -187,7 +187,7 @@ mod switch8;
 
 use airquality::{AirQuality, TempHum};
 use controller2::Controller2;
-use switch8::Switch8;
+use switch8::{Switch8, Switch8Out};
 
 #[enum_dispatch(Device)]
 #[derive(Clone, Debug, PartialEq)]
@@ -195,6 +195,7 @@ pub enum Model {
     TempHum(TempHum),
     AirQuality(AirQuality),
     Switch8(Switch8),
+    Switch8Out(Switch8Out),
     Controller2(Controller2),
     Unknown(Unknown),
 }
@@ -207,6 +208,7 @@ impl Model {
             "11151" => Self::AirQuality(AirQuality::new(info)),
             "11220" => Self::Switch8(Switch8::new(info)),
             "11228" => Self::Switch8(Switch8::new(info)),
+            "11229" => Self::Switch8Out(Switch8Out::new(info)),
             "11340" => Self::Controller2(Controller2::new(info)),
             _ => Self::Unknown(Unknown::new(info)),
         }

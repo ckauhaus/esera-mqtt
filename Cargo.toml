@@ -13,23 +13,31 @@ lazy_static = "1.4.0"
 log = "0.4.11"
 structopt = "0.3.17"
 thiserror = "1.0.21"
-nom = "6.0.0"
-strum = "0.19.5"
-strum_macros = "0.19.4"
 bitflags = "1.2.1"
-rumqttc = "0.2.0"
 crossbeam = "0.8.0"
 enum_dispatch = "0.3.4"
+nom = "6.0.0"
 parking_lot = "0.11.1"
-serde = { version = "1.0.117", features = ["derive"] }
+rumqttc = "0.3"
 serde_json = "1.0.59"
+serde = { version = "1.0.117", features = ["derive"] }
+strum = "0.19.5"
+strum_macros = "0.19.4"
+tokio = "0.3.5"
+toml = "0.5.8"
 
 [dev-dependencies]
-bstr = "0.2.14"
-assert_matches = "1.4.0"
-pretty_assertions = "0.6.1"
-regex = "1.4.2"
-rexpect = "0.4.0"
+bstr = "0.2"
+assert_matches = "1.4"
+pretty_assertions = "0.6"
+regex = "1.4"
+rexpect = "0.4"
+
+[[bin]]
+name = "esera"
+
+[[bin]]
+name = "climate"
 
 [profile.release]
 lto = "thin"
