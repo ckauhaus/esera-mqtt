@@ -7,6 +7,7 @@ temp = "ESERA/1/T_E05_06/temp"
 heat_state = "ESERA/2/K2/out/ch4"
 heat_cmnd = "ESERA/2/K2/set/ch4"
 temp = "ESERA/2/T_O01/temp"
+offset = -1.0
 
 [O02]
 heat_state = "ESERA/2/K2/out/ch5"

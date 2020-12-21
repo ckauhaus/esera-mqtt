@@ -1,5 +1,5 @@
-use lazy_static::lazy_static;
 ///! HVAC climate controller
+use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumString;
 use strum_macros::IntoStaticStr;
@@ -26,6 +26,7 @@ const TOK_TEMP: Token = 2;
 const TOK_MODE_SET: Token = 3;
 const TOK_TEMP_SET: Token = 4;
 const TOK_DEW: Token = 5;
+const TOK_AUX_STATE: Token = 6;
 
 const INITIAL_TEMP: f32 = 21.0;
 
@@ -51,7 +52,7 @@ struct Discovery<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     aux_state_topic: Option<String>,
     availability_topic: String,
-    current_temperature_topic: &'a str,
+    current_temperature_topic: String,
     device: &'static AnnounceDevice,
     initial: f32,
     mode_command_topic: String,
@@ -73,6 +74,8 @@ pub struct Conf {
     aux_cmnd: Option<String>,
     temp: String,
     dew: Option<String>,
+    #[serde(default)]
+    offset: f32,
 }
 
 #[derive(Debug, Clone, IntoStaticStr, strum_macros::Display, Deserialize)]
@@ -102,6 +105,7 @@ pub struct Climate {
     temp_set: f32,
     temp_cur: f32,
     heating_on: bool,
+    aux_on: bool,
 }
 
 impl Climate {
@@ -114,6 +118,7 @@ impl Climate {
             temp_set: INITIAL_TEMP,
             temp_cur: INITIAL_TEMP,
             heating_on: false,
+            aux_on: false,
         }
     }
 
@@ -132,7 +137,7 @@ impl Climate {
             aux_command_topic: self.conf.aux_cmnd.clone(),
             aux_state_topic: self.conf.aux_state.clone(),
             availability_topic: format!("{}/status", BASE), // global status
-            current_temperature_topic: &self.conf.temp,
+            current_temperature_topic: self.t("current"),
             device: &DEVICE,
             initial: INITIAL_TEMP,
             payload_on: "1",
@@ -166,6 +171,9 @@ impl Climate {
         if let Some(dew) = &self.conf.dew {
             t.push((TOK_DEW, dew.clone()));
         }
+        if let Some(aux_state) = &self.conf.aux_state {
+            t.push((TOK_AUX_STATE, aux_state.clone()))
+        }
         t.into_iter()
     }
 
@@ -191,9 +199,7 @@ impl Climate {
                     self.temp_set = new;
                     let mut res = self.eval();
                     res.push(MqttMsg::retain(self.t("target/set"), payload));
-                    Ok(res)
-                } else {
-                    Ok(Vec::new())
+                    return Ok(res);
                 }
             }
             TOK_MODE_SET => {
@@ -205,20 +211,16 @@ impl Climate {
                     self.mode = new;
                     let mut res = self.eval();
                     res.push(MqttMsg::retain(self.t("mode/set"), payload));
-                    Ok(res)
-                } else {
-                    Ok(Vec::new())
+                    return Ok(res);
                 }
             }
             TOK_TEMP => {
                 let new = payload
-                    .parse()
+                    .parse::<f32>()
                     .map_err(|e| Error::FloatFormat(payload.into(), e))?;
                 if self.temp_cur != new {
-                    self.temp_cur = new;
-                    Ok(self.eval())
-                } else {
-                    Ok(Vec::new())
+                    self.temp_cur = new + self.conf.offset;
+                    return Ok(self.eval());
                 }
             }
             TOK_HEAT_STATE => {
@@ -226,23 +228,37 @@ impl Climate {
                 if self.heating_on != new {
                     debug!("[{}] Heating is {}", self.name, new);
                     self.heating_on = new;
-                    Ok(self.eval())
-                } else {
-                    Ok(Vec::new())
+                    return Ok(self.eval());
                 }
             }
-            _ => Ok(Vec::new()),
+            TOK_AUX_STATE => {
+                let new = str2bool(payload);
+                if self.aux_on != new {
+                    debug!("[{}] Aux heating is {}", self.name, new);
+                    self.aux_on = new;
+                }
+            }
+            _ => (),
         }
+        Ok(Vec::new())
     }
 
     pub fn eval(&self) -> Vec<MqttMsg> {
         let mut res = vec![
-            MqttMsg::new(self.t("mode"), &self.mode),
             MqttMsg::new(self.t("action"), self.action()),
+            MqttMsg::new(self.t("mode"), &self.mode),
+            MqttMsg::new(self.t("current"), self.temp_cur),
             MqttMsg::new(self.t("target"), self.temp_set),
         ];
-        if self.mode == Mode::Off && self.heating_on {
-            res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(false)));
+        if self.mode == Mode::Off {
+            if self.heating_on {
+                res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(false)));
+            }
+            if let Some(aux_cmnd) = &self.conf.aux_cmnd {
+                if self.aux_on {
+                    res.push(MqttMsg::new(aux_cmnd, bool2str(false)));
+                }
+            }
             return res;
         }
         match (self.temp_cur < self.temp_set, self.heating_on) {

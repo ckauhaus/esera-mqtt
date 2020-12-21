@@ -86,11 +86,9 @@ impl Device for Switch8 {
     }
 
     fn register_mqtt(&self) -> Vec<(String, Token)> {
-        let mut t = Vec::with_capacity(8);
-        for i in 1..=8 {
-            t.push((self.info.fmt(format_args!("/set/ch{}", i)), i - 1));
-        }
-        t
+        (1..=8)
+            .map(|i| (self.info.fmt(format_args!("/set/ch{}", i)), i - 1))
+            .collect()
     }
 
     fn handle_mqtt(&self, msg: MqttMsg, token: Token) -> Result<TwoWay> {
@@ -143,27 +141,10 @@ impl Device for Switch8Out {
     }
 
     fn announce(&self) -> Vec<MqttMsg> {
-        let mut res = Vec::with_capacity(20);
         let dev = self.announce_device();
-        for ch in 1..=8 {
-            res.push(MqttMsg::new(
-                disc_topic("switch", &self.info, format_args!("ch{}", ch)),
-                serde_json::to_string(&json!({
-                        "availability_topic": self.info.topic("status"),
-                        "command_topic": self.info.fmt(format_args!("/set/ch{}", ch)),
-                        "state_topic": self.info.fmt(format_args!("/out/ch{}", ch)),
-                        "device": dev,
-                        "name": format!("Switch {}/{} out {}", self.info.contno, self.name(), ch),
-                        "payload_on": "1",
-                        "payload_off": "0",
-                        "unique_id": format!("{}_ch{}", self.info.serno, ch),
-                        "qos": 1,
-                    }
-                ))
-                .unwrap(),
-            ));
-        }
-        res
+        (1..=8)
+            .map(|ch| ann_out_ch(&dev, self.name(), &self.info, ch))
+            .collect()
     }
 
     fn register_mqtt(&self) -> Vec<(String, Token)> {
