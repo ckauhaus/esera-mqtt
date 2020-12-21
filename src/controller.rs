@@ -61,7 +61,7 @@ impl ControllerConnection<TcpStream> {
     }
 
     fn setup(&self) -> Result<()> {
-        self.send_line(format!("SET,SYS,DATAPRINT,1"))?;
+        self.send_line("SET,SYS,DATAPRINT,1".to_owned())?;
         pick!(self, Dataprint)?;
         let now = Local::now();
         self.send_line(format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))?;

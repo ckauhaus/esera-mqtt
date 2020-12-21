@@ -18,6 +18,7 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub static BASE: &str = "homeassistant/climate/virt";
+const EPSILON_TEMP: f32 = 0.01;
 
 pub type Token = u16;
 
@@ -192,14 +193,23 @@ impl Climate {
         match token {
             TOK_TEMP_SET => {
                 let new = payload
-                    .parse()
+                    .parse::<f32>()
                     .map_err(|e| Error::FloatFormat(payload.into(), e))?;
-                if self.temp_set != new {
+                if (self.temp_set - new).abs() > EPSILON_TEMP {
                     info!("[{}] Setting target temperature to {} °C", self.name, new);
                     self.temp_set = new;
                     let mut res = self.eval();
                     res.push(MqttMsg::retain(self.t("target/set"), payload));
                     return Ok(res);
+                }
+            }
+            TOK_TEMP => {
+                let new = payload
+                    .parse::<f32>()
+                    .map_err(|e| Error::FloatFormat(payload.into(), e))?;
+                if (self.temp_cur - new).abs() > EPSILON_TEMP {
+                    self.temp_cur = new + self.conf.offset;
+                    return Ok(self.eval());
                 }
             }
             TOK_MODE_SET => {
@@ -212,15 +222,6 @@ impl Climate {
                     let mut res = self.eval();
                     res.push(MqttMsg::retain(self.t("mode/set"), payload));
                     return Ok(res);
-                }
-            }
-            TOK_TEMP => {
-                let new = payload
-                    .parse::<f32>()
-                    .map_err(|e| Error::FloatFormat(payload.into(), e))?;
-                if self.temp_cur != new {
-                    self.temp_cur = new + self.conf.offset;
-                    return Ok(self.eval());
                 }
             }
             TOK_HEAT_STATE => {

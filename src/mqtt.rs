@@ -172,7 +172,7 @@ impl MqttConnection {
 
     pub fn send(&mut self, msg: MqttMsg) -> Result<()> {
         debug!("==> {:?}", msg);
-        Ok(match msg {
+        match msg {
             MqttMsg::Pub {
                 topic,
                 payload,
@@ -181,7 +181,8 @@ impl MqttConnection {
                 .client
                 .publish(topic, QoS::AtMostOnce, retain, payload.as_bytes())?,
             MqttMsg::Sub { topic } => self.client.subscribe(topic, QoS::AtMostOnce)?,
-        })
+        }
+        Ok(())
     }
 
     pub fn subscribe(&mut self, topic: &str) -> Result<()> {

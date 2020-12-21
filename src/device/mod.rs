@@ -109,9 +109,10 @@ pub trait Device {
 macro_rules! new {
     ($type:ty) => {
         pub fn new(info: DeviceInfo) -> Self {
+            #[allow(clippy::needless_update)]
             Self {
                 info,
-                ..Self::default()
+                ..Default::default()
             }
         }
     };

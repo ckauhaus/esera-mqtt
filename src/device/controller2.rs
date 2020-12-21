@@ -137,7 +137,7 @@ impl Device for Controller2 {
                 TwoWay::from_1wire(format!("SET,SYS,OUT,{},{}", i, str2bool(pl) as u8))
             }
             5 => {
-                let val: f32 = pl.parse().or(Err(Error::Value(pl.into())))?;
+                let val: f32 = pl.parse().map_err(|_| Error::Value(pl.into()))?;
                 if val < 0.0 || val > 10.0 {
                     return Err(Error::Value(pl.into()));
                 } else {

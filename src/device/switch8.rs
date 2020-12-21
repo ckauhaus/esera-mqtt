@@ -41,7 +41,7 @@ impl Device for Switch8 {
         Ok(match resp {
             Response::Devstatus(s) => {
                 debug!("[{}] Switch8 {} is {:b}", s.contno, s.addr, s.val);
-                match s.addr.rsplit('_').nth(0).unwrap() {
+                match s.addr.rsplit('_').next().unwrap() {
                     "1" => digital_io(&self.info, 8, "in", s.val),
                     "3" => digital_io(&self.info, 8, "out", s.val),
                     other => panic!("BUG: Unknown busaddr {}", other),
@@ -125,7 +125,7 @@ impl Device for Switch8Out {
         Ok(match resp {
             Response::Devstatus(s) => {
                 debug!("[{}] Switch8Out {} is {:b}", s.contno, s.addr, s.val);
-                match s.addr.rsplit('_').nth(0).unwrap() {
+                match s.addr.rsplit('_').next().unwrap() {
                     "3" => digital_io(&self.info, 8, "out", s.val),
                     other => panic!("BUG: Unknown busaddr {}", other),
                 }

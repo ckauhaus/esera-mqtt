@@ -33,16 +33,18 @@ struct Opt {
     mqtt_cred: String,
 }
 
-fn ctrl_loop<A>(addr: A) -> Result<(Sender<String>, Receiver<Result<Response, ControllerError>>)>
+type ChannelPair<O, I> = (Sender<O>, Receiver<I>);
+
+fn ctrl_loop<A>(addr: A) -> Result<ChannelPair<String, Result<Response, ControllerError>>>
 where
     A: ToSocketAddrs + Clone + fmt::Debug + Send + 'static,
 {
     let (up_tx, up_rx) = channel::unbounded();
     let (down_tx, down_rx) = channel::unbounded();
     let mut c = ControllerConnection::new(addr.clone())?;
-    down_tx.send(c.csi().map(|c| Response::CSI(c))).ok();
+    down_tx.send(c.csi().map(Response::CSI)).ok();
     // this is going to trigger registration which will be handled via ordinary event processing
-    down_tx.send(c.list().map(|l| Response::List3(l))).ok();
+    down_tx.send(c.list().map(Response::List3)).ok();
     thread::spawn(move || loop {
         match c.event_loop(up_rx.clone(), down_tx.clone()) {
             Ok(_) => return,
@@ -54,8 +56,8 @@ where
             info!("Retrying in 5s...");
             thread::sleep(Duration::new(5, 0));
         }
-        down_tx.send(c.csi().map(|c| Response::CSI(c))).ok();
-        down_tx.send(c.list().map(|l| Response::List3(l))).ok();
+        down_tx.send(c.csi().map(Response::CSI)).ok();
+        down_tx.send(c.list().map(Response::List3)).ok();
     });
     Ok((up_tx, down_rx))
 }
@@ -63,7 +65,7 @@ where
 pub fn ctrl_create(
     addrs: &[String],
     default_port: u16,
-) -> Result<Vec<(Sender<String>, Receiver<Result<Response, ControllerError>>)>> {
+) -> Result<Vec<ChannelPair<String, Result<Response, ControllerError>>>> {
     addrs
         .iter()
         .map(|c| {

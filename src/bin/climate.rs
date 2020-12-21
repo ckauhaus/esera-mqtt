@@ -114,22 +114,20 @@ fn run(opt: Opt) -> Result<()> {
     }
     info!("Entering main loop");
     for msg in recv {
-        match msg {
-            MqttMsg::Pub {
-                ref topic,
-                ref payload,
-                ..
-            } => {
-                if let Some(xs) = routes.get(topic) {
-                    for (idx, tok) in xs {
-                        let resp = controllers.process(*idx, *tok, topic, payload);
-                        for r in resp {
-                            mqtt.send(r)?;
-                        }
+        if let MqttMsg::Pub {
+            ref topic,
+            ref payload,
+            ..
+        } = msg
+        {
+            if let Some(xs) = routes.get(topic) {
+                for (idx, tok) in xs {
+                    let resp = controllers.process(*idx, *tok, topic, payload);
+                    for r in resp {
+                        mqtt.send(r)?;
                     }
                 }
             }
-            _ => (),
         }
     }
     Ok(())

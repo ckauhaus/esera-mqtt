@@ -343,22 +343,22 @@ pub enum Response {
 
 pub fn parse(i: &str) -> PResult<Response> {
     alt((
-        map(kal, |v| Response::Keepalive(v)),
-        map(inf, |v| Response::Info(v)),
-        map(err, |v| Response::Err(v)),
-        map(evt, |v| Response::Event(v)),
-        map(rst, |v| Response::Rst(v)),
-        map(rdy, |v| Response::Rdy(v)),
-        map(save, |v| Response::Save(v)),
-        map(dataprint, |v| Response::Dataprint(v)),
-        map(datatime, |v| Response::Datatime(v)),
-        map(date, |v| Response::Date(v)),
-        map(time, |v| Response::Time(v)),
-        map(lst3, |v| Response::List3(v)),
-        map(csi, |v| Response::CSI(v)),
-        map(dio, |v| Response::DIO(v)),
-        map(owdstatus, |v| Response::OWDStatus(v)),
-        map(devstatus, |v| Response::Devstatus(v)),
+        map(kal, Response::Keepalive),
+        map(inf, Response::Info),
+        map(err, Response::Err),
+        map(evt, Response::Event),
+        map(rst, Response::Rst),
+        map(rdy, Response::Rdy),
+        map(save, Response::Save),
+        map(dataprint, Response::Dataprint),
+        map(datatime, Response::Datatime),
+        map(date, Response::Date),
+        map(time, Response::Time),
+        map(lst3, Response::List3),
+        map(csi, Response::CSI),
+        map(dio, Response::DIO),
+        map(owdstatus, Response::OWDStatus),
+        map(devstatus, Response::Devstatus),
     ))(i)
 }
 
