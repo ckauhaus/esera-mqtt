@@ -2,6 +2,7 @@ use super::{digital_io, disc_topic, str2bool, AnnounceDevice, Result, Token};
 use crate::{Device, DeviceInfo, MqttMsg, Response, TwoWay};
 
 use serde_json::json;
+
 fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: usize) -> MqttMsg {
     MqttMsg::new(
         disc_topic("switch", &info, format_args!("ch{}", ch)),
@@ -10,7 +11,7 @@ fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: usize) ->
                 "command_topic": info.fmt(format_args!("/set/ch{}", ch)),
                 "state_topic": info.fmt(format_args!("/out/ch{}", ch)),
                 "device": dev,
-                "name": format!("Switch {}/{} out {}", info.contno, name, ch),
+                "name": format!("Switch {}/{}.{}", info.contno, name, ch),
                 "payload_on": "1",
                 "payload_off": "0",
                 "unique_id": format!("{}_ch{}", info.serno, ch),

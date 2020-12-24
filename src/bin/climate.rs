@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process;
+use std::time::Duration;
 use structopt::StructOpt;
 
 use esera_mqtt::climate::{Climate, Conf, Token, BASE};
@@ -128,6 +129,7 @@ fn run(opt: Opt) -> Result<()> {
                     }
                 }
             }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
     Ok(())
