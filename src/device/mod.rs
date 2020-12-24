@@ -183,10 +183,12 @@ fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: u32) -> TwoWa
 }
 
 mod airquality;
+mod binary_sensor;
 mod controller2;
 mod switch8;
 
 use airquality::{AirQuality, TempHum};
+use binary_sensor::BinarySensor;
 use controller2::Controller2;
 use switch8::{Switch8, Switch8Out};
 
@@ -195,8 +197,9 @@ use switch8::{Switch8, Switch8Out};
 pub enum Model {
     TempHum(TempHum),
     AirQuality(AirQuality),
-    Switch8(Switch8),
+    BinarySensor(BinarySensor),
     Switch8Out(Switch8Out),
+    Switch8(Switch8),
     Controller2(Controller2),
     Unknown(Unknown),
 }
@@ -207,6 +210,7 @@ impl Model {
         match &*a {
             "11150" => Self::TempHum(TempHum::new(info)),
             "11151" => Self::AirQuality(AirQuality::new(info)),
+            "11216" => Self::BinarySensor(BinarySensor::new(info)),
             "11220" => Self::Switch8(Switch8::new(info)),
             "11228" => Self::Switch8(Switch8::new(info)),
             "11229" => Self::Switch8Out(Switch8Out::new(info)),
