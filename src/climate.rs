@@ -19,6 +19,7 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub static BASE: &str = "homeassistant/climate/virt";
 const EPSILON_TEMP: f32 = 0.02;
+const AUX_HEAT_TRIGGER: f32 = 0.8; // offset in °C
 
 pub type Token = u16;
 
@@ -275,15 +276,21 @@ impl Climate {
         }
         match (self.temp_cur < self.temp_set, self.heating_on) {
             (true, false) => {
-                info!("[{}] Turning heating on ({} °C)", self.name, self.temp_cur);
+                info!(
+                    "[{}] Turning heating on ({:.2} °C)",
+                    self.name, self.temp_cur
+                );
                 res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(true)));
                 // Use auxiliary heating to bridge larger temperature gaps
-                if self.temp_cur < self.temp_set - 0.9 {
+                if self.temp_cur < self.temp_set - AUX_HEAT_TRIGGER {
                     res.extend(self.set_aux(true));
                 }
             }
             (false, true) => {
-                info!("[{}] Turning heating off ({} °C)", self.name, self.temp_cur);
+                info!(
+                    "[{}] Turning heating off ({:.2} °C)",
+                    self.name, self.temp_cur
+                );
                 res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(false)));
                 res.extend(self.set_aux(false));
             }

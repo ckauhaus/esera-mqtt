@@ -82,10 +82,12 @@ impl Device for Controller2 {
             DIOStatus::LinkedEdge | DIOStatus::IndependentEdge => "short",
             DIOStatus::LinkedLevel | DIOStatus::IndependentLevel => "long",
         };
-        for ch in 1..=5 {
+        for ch in 1..=4 {
             for (dir, pl) in &[("press", "1"), ("release", "0")] {
                 res.push(trigger(ch, dur, dir, pl));
             }
+        }
+        for ch in 1..=5 {
             res.push(MqttMsg::new(
                 disc_topic("switch", &self.info, format_args!("ch{}", ch)),
                 serde_json::to_string(&json!({
@@ -97,7 +99,6 @@ impl Device for Controller2 {
                         "payload_on": "1",
                         "payload_off": "0",
                         "unique_id": format!("{}_ch{}", self.info.serno, ch),
-                        "qos": 1
                     }
                 ))
                 .unwrap(),
@@ -123,20 +124,20 @@ impl Device for Controller2 {
 
     fn register_mqtt(&self) -> Vec<(String, Token)> {
         let mut t = Vec::with_capacity(20);
-        for i in 1..=4 {
+        for i in 1..=5 {
             t.push((self.info.fmt(format_args!("/set/ch{}", i)), i));
         }
-        t.push((self.info.topic("set/ana"), 5));
+        t.push((self.info.topic("set/ana"), 6));
         t
     }
 
     fn handle_mqtt(&self, msg: MqttMsg, token: Token) -> Result<TwoWay> {
         let pl = msg.payload();
         Ok(match token {
-            i if i > 0 && i <= 4 => {
+            i if i >= 1 && i <= 5 => {
                 TwoWay::from_1wire(format!("SET,SYS,OUT,{},{}", i, str2bool(pl) as u8))
             }
-            5 => {
+            6 => {
                 let val: f32 = pl.parse().map_err(|_| Error::Value(pl.into()))?;
                 if val < 0.0 || val > 10.0 {
                     return Err(Error::Value(pl.into()));

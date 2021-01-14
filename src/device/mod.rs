@@ -64,15 +64,25 @@ pub trait Device {
 
     /// Helper to create (largely constant) device data in announcements. Override for controllers.
     fn announce_device(&self) -> AnnounceDevice {
+        let info = self.info();
+        let mut identifiers = vec![
+            info.serno.clone(),
+            format!("{}/{}", info.contno, info.busid),
+        ];
+        if let Some(name) = &info.name {
+            identifiers.push(format!("{}/{}", info.contno, name))
+        }
         AnnounceDevice {
-            identifiers: vec![self.info().serno.clone(), self.name().into()],
-            model: format!("{} {}", self.model(), self.info().artno),
-            name: format!("1-Wire bus {}/{}", self.info().contno, self.name()),
+            identifiers,
+            model: format!("{} {}", self.model(), info.artno),
+            name: format!("1-Wire bus {}/{}", info.contno, self.name()),
             manufacturer: "ESERA".into(),
             sw_version: None,
-            // Assume that we have exclusively Controller2. Needs to be generalized in case
-            // several controller types are in use.
-            via_device: Some(format!("1-Wire {}/Controller2", self.info().contno)),
+            via_device: if info.busid != "SYS" {
+                Some(format!("{}/SYS", info.contno))
+            } else {
+                None
+            },
         }
     }
 
