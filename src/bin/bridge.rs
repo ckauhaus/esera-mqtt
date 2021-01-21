@@ -104,6 +104,7 @@ fn run(opt: Opt) -> Result<()> {
         (Some(user), None) => mqtt_opt.set_credentials(user, ""),
         _ => &mut mqtt_opt,
     };
+    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
     let (mut mqtt, mqtt_chan) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
     mqtt.send(MqttMsg::retain("ESERA/status", "online"))?;
     let mqtt_idx = sel.recv(&mqtt_chan);
@@ -140,7 +141,6 @@ fn run(opt: Opt) -> Result<()> {
 fn main() {
     env_logger::init();
     let opt = Opt::from_args();
-    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
     if let Err(e) = run(opt) {
         error!("FATAL: {}", e);
         std::process::exit(1)

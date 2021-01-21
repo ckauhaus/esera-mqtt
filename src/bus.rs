@@ -75,6 +75,25 @@ impl Universe {
         res
     }
 
+    fn register_all_mqtt(&mut self) -> TwoWay {
+        info!("(Re-)registering all MQTT topics");
+        let mut res = TwoWay::default();
+        self.topics.clear();
+        for b in self.bus.iter().filter(|b| b.configured()) {
+            for (topic, addr) in b.register_mqtt() {
+                res += TwoWay::from_mqtt(MqttMsg::sub(&topic));
+                self.topics.insert(topic, addr);
+            }
+        }
+        debug!("MQTT Registry: {:?}", self.topics);
+        assert!(
+            res.ow.is_empty(),
+            "Results should not contain 1-Wire messages (but: {:?})",
+            res.ow
+        );
+        res
+    }
+
     /// Main processing entry point for incoming 1-Wire events.
     pub fn handle_1wire(&mut self, resp: Response, conn_idx: usize) -> Result<TwoWay> {
         match resp {
@@ -119,12 +138,21 @@ impl Universe {
     /// Processes MQTT message, returns MQTT/1Wire results as well as the controller index to pass
     /// the latter to.
     pub fn handle_mqtt(&mut self, msg: MqttMsg) -> Result<(TwoWay, usize), crate::Error> {
-        if let Some((bus, dev, tok)) = self.route(&msg.topic()) {
-            info!("MQTT event: {}", msg);
-            let i = bus.connection_idx;
-            return dev.handle_mqtt(msg, tok).map(|res| Ok((res, i)))?;
+        match msg {
+            MqttMsg::Pub { ref topic, .. } => {
+                if let Some((bus, dev, tok)) = self.route(topic) {
+                    info!("MQTT event: {}", msg);
+                    let i = bus.connection_idx;
+                    dev.handle_mqtt(msg, tok).map(|res| Ok((res, i)))?
+                } else {
+                    Err(crate::Error::NoHandler(msg))
+                }
+            }
+            // Controller index doesn't really matter since the results don't
+            // contain 1-Wire messages.
+            MqttMsg::Reconnected => Ok((self.register_all_mqtt(), 0)),
+            _ => Err(crate::Error::NoHandler(msg)),
         }
-        Err(crate::Error::NoHandler(msg))
     }
 }
 
@@ -161,6 +189,7 @@ impl Bus {
         debug!("[{}] 1Wire Registry: {:?}", self.contno, self.busaddrs);
     }
 
+    /// Collects MQTT subsribe topics along with (busid, device, token) routing tuples
     fn register_mqtt(&self) -> impl Iterator<Item = (String, (u8, DevIdx, Token))> + '_ {
         let contno = self.contno;
         self.devices.iter().enumerate().flat_map(move |(i, dev)| {

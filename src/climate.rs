@@ -5,7 +5,7 @@ use strum_macros::EnumString;
 use strum_macros::IntoStaticStr;
 use thiserror::Error;
 
-use crate::{bool2str, str2bool, AnnounceDevice, MqttMsg};
+use crate::{bool2str, str2bool, AnnounceDevice, MqttMsg, Token};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -20,8 +20,6 @@ type Result<T, E = Error> = std::result::Result<T, E>;
 pub static BASE: &str = "homeassistant/climate/virt";
 const EPSILON_TEMP: f32 = 0.02;
 const AUX_HEAT_TRIGGER: f32 = 0.8; // offset in °C
-
-pub type Token = u16;
 
 const TOK_HEAT_STATE: Token = 1;
 const TOK_TEMP: Token = 2;

@@ -8,11 +8,10 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process;
-use std::time::Duration;
 use structopt::StructOpt;
 
-use esera_mqtt::climate::{Climate, Conf, Token, BASE};
-use esera_mqtt::{MqttConnection, MqttMsg};
+use esera_mqtt::climate::{Climate, Conf, BASE};
+use esera_mqtt::{MqttConnection, MqttMsg, Routes, Token};
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -96,40 +95,46 @@ fn run(opt: Opt) -> Result<()> {
         retain: true,
     });
     let (mut mqtt, recv) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
+    mqtt.send(MqttMsg::retain(format!("{}/status", BASE), "online"))
+        .context("Cannot set status to online")?;
     let mut controllers = Controllers::new(configs);
-    let mut routes = HashMap::new();
-    for (idx, tok, topic) in controllers.subscribe_topics() {
-        mqtt.subscribe(&topic)?;
-        routes
-            .entry(topic)
-            .or_insert_with(Vec::new)
-            .push((idx, tok))
+    let mut routes = Routes::new();
+    for msg in controllers
+        .subscribe_topics()
+        .flat_map(|(idx, token, topic)| routes.register(topic, (idx, token)))
+    {
+        mqtt.send(msg)?
     }
+    // publish autoconfig entries
     for msg in controllers.announce() {
         mqtt.send(msg)?;
     }
-    mqtt.send(MqttMsg::retain(format!("{}/status", BASE), "online"))
-        .context("Cannot set status to online")?;
     for msg in controllers.eval() {
         mqtt.send(msg)?;
     }
     info!("Entering main loop");
     for msg in recv {
-        if let MqttMsg::Pub {
-            ref topic,
-            ref payload,
-            ..
-        } = msg
-        {
-            if let Some(xs) = routes.get(topic) {
-                for (idx, tok) in xs {
-                    let resp = controllers.process(*idx, *tok, topic, payload);
-                    for r in resp {
-                        mqtt.send(r)?;
+        match msg {
+            MqttMsg::Pub {
+                ref topic,
+                ref payload,
+                ..
+            } => {
+                if let Some(xs) = routes.get(topic) {
+                    for (idx, tok) in xs {
+                        let resp = controllers.process(*idx, *tok, topic, payload);
+                        for r in resp {
+                            mqtt.send(r)?;
+                        }
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(10));
+            MqttMsg::Reconnected => {
+                for msg in routes.subscriptions() {
+                    mqtt.send(msg)?
+                }
+            }
+            _ => warn!("Unkown MQTT message type: {:?}", msg),
         }
     }
     Ok(())

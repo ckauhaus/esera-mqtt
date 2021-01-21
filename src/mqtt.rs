@@ -1,6 +1,8 @@
 use crossbeam::channel::{self, Receiver, Sender};
 use rumqttc::{ConnectReturnCode, Event, MqttOptions, Packet, QoS};
 use std::fmt;
+use std::thread;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -31,6 +33,7 @@ pub enum MqttMsg {
     Sub {
         topic: String,
     },
+    Reconnected, // XXX TODO handle downstream
 }
 
 impl MqttMsg {
@@ -56,18 +59,26 @@ impl MqttMsg {
         }
     }
 
+    /// Returns topic of a message. Panics if this message does not contain a topic.
     pub fn topic(&self) -> &str {
         match self {
             Self::Pub { ref topic, .. } => topic,
             Self::Sub { ref topic } => topic,
+            _ => panic!(
+                "Attempted to call MqttMsg::topic of a message without payload ({:?})",
+                self
+            ),
         }
     }
 
-    /// Returns payload of a publish message. Panics if this is no publish message.
+    /// Returns payload of a publish message. Panics if this is not a publish message.
     pub fn payload(&self) -> &str {
         match self {
             Self::Pub { ref payload, .. } => payload,
-            _ => panic!("Attempted to call MqttMsg::payload of a non-publish message"),
+            _ => panic!(
+                "Attempted to call MqttMsg::payload of a non-publish message ({:?})",
+                self
+            ),
         }
     }
 
@@ -97,30 +108,9 @@ impl fmt::Display for MqttMsg {
                 if *retain { " (retain)" } else { "" }
             ),
             Self::Sub { topic } => write!(f, "Subscribe {}", topic),
+            Self::Reconnected => write!(f, "Reconnected to broker"),
         }
     }
-}
-
-fn mqtt_recv_loop(host: String, mut conn: rumqttc::Connection, tx: Sender<MqttMsg>) {
-    std::thread::Builder::new()
-        .name("MQTT reader".into())
-        .spawn(move || {
-            for evt in conn.iter() {
-                match evt {
-                    Ok(Event::Incoming(pck)) => match process_packet(pck, &tx) {
-                        Err(Error::Send(_)) => {
-                            info!("Disconnecting from MQTT broker {}", host);
-                            return;
-                        }
-                        Err(e) => warn!("Failed to process incoming packet: {}", e),
-                        Ok(_) => (),
-                    },
-                    Ok(Event::Outgoing(_)) => (),
-                    Err(e) => error!("{}", e),
-                }
-            }
-        })
-        .unwrap();
 }
 
 fn process_packet(pck: Packet, tx: &Sender<MqttMsg>) -> Result<()> {
@@ -131,6 +121,13 @@ fn process_packet(pck: Packet, tx: &Sender<MqttMsg>) -> Result<()> {
             tx.send(msg).map_err(Error::from)
         }
         Packet::Disconnect => Err(Error::Disconnected),
+        Packet::ConnAck(rumqttc::ConnAck {
+            code: ConnectReturnCode::Accepted,
+            ..
+        }) => {
+            info!("Reconnected to MQTT broker");
+            tx.send(MqttMsg::Reconnected).map_err(Error::from)
+        }
         _ => Ok(()),
     }
 }
@@ -163,11 +160,42 @@ impl MqttConnection {
         }
         if success {
             let (tx, rx) = channel::unbounded();
-            mqtt_recv_loop(host.to_string(), conn, tx);
-            Ok((Self { host, client }, rx))
+            let this = Self { host, client };
+            this.recv_loop(conn, tx);
+            Ok((this, rx))
         } else {
             Err(Error::Disconnected)
         }
+    }
+
+    fn recv_loop(&self, mut conn: rumqttc::Connection, tx: Sender<MqttMsg>) {
+        let host = self.host.clone();
+        std::thread::Builder::new()
+            .name("MQTT reader".into())
+            .spawn(move || {
+                let mut retry = 200;
+                for evt in conn.iter() {
+                    match evt {
+                        Ok(Event::Incoming(pck)) => match process_packet(pck, &tx) {
+                            Err(Error::Send(_)) => {
+                                info!("Disconnecting from MQTT broker {}", host);
+                                return;
+                            }
+                            Err(e) => warn!("Failed to process incoming packet: {}", e),
+                            Ok(_) => (),
+                        },
+                        Ok(Event::Outgoing(_)) => (),
+                        Err(e) => {
+                            error!("{}, reconnecting in {} ms", e, retry);
+                            thread::sleep(Duration::from_millis(retry));
+                            if retry < 20_000 {
+                                retry = retry * 6 / 5;
+                            }
+                        }
+                    }
+                }
+            })
+            .unwrap();
     }
 
     pub fn send(&mut self, msg: MqttMsg) -> Result<()> {
@@ -181,6 +209,7 @@ impl MqttConnection {
                 .client
                 .publish(topic, QoS::AtMostOnce, retain, payload.as_bytes())?,
             MqttMsg::Sub { topic } => self.client.subscribe(topic, QoS::AtMostOnce)?,
+            MqttMsg::Reconnected => (), // XXX bail out instead?
         }
         Ok(())
     }

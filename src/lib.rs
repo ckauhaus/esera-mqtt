@@ -4,6 +4,7 @@ mod controller;
 mod device;
 mod mqtt;
 mod parser;
+mod routing;
 
 pub use bus::Universe;
 pub use controller::ControllerConnection;
@@ -11,6 +12,7 @@ pub use controller::Error as ControllerError;
 pub use device::{bool2str, str2bool, AnnounceDevice, Device};
 pub use mqtt::{MqttConnection, MqttMsg};
 pub use parser::{Response, Status, CSI};
+pub use routing::{Routes, Token};
 
 #[macro_use]
 extern crate log;

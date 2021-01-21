@@ -2,7 +2,13 @@
 authors = ["Christian Kauhaus <christian@kauhaus.de>"]
 edition = "2018"
 name = "esera-mqtt"
-version = "0.3.0"
+version = "0.4.0"
+
+[[bin]]
+name = "bridge"
+
+[[bin]]
+name = "climate"
 
 [dependencies]
 anyhow = "1"
@@ -32,12 +38,6 @@ assert_matches = "1.4"
 pretty_assertions = "0.6"
 regex = "1.4"
 rexpect = "0.4"
-
-[[bin]]
-name = "esera"
-
-[[bin]]
-name = "climate"
 
 [profile.release]
 lto = "thin"
