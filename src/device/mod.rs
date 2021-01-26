@@ -152,19 +152,14 @@ pub fn bool2str<N: Into<u32>>(n: N) -> &'static str {
 }
 
 pub fn str2bool(s: &str) -> bool {
-    match s {
-        "1" => true,
-        "on" => true,
-        "true" => true,
-        _ => false,
-    }
+    matches!(s, "1" | "on" | "true")
 }
 
-fn float2centi(f: f32) -> u32 {
-    (f * 100.) as u32
+fn float2centi(f: f32) -> i32 {
+    (f * 100.) as i32
 }
 
-fn centi2float(c: u32) -> f32 {
+fn centi2float(c: i32) -> f32 {
     (c as f32) / 100.
 }
 
@@ -181,12 +176,18 @@ fn disc_topic(typ: &str, info: &DeviceInfo, sub: fmt::Arguments) -> String {
     )
 }
 
-fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: u32) -> TwoWay {
+fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: i32) -> TwoWay {
+    assert!(
+        val >= 0,
+        "DigitalIO value must be positive ({} has {})",
+        info.busid,
+        val
+    );
     let mut res = TwoWay::default();
     for bit in 0..n {
         res += TwoWay::from_mqtt(MqttMsg::new(
             info.fmt(format_args!("/{}/ch{}", inout, bit + 1)),
-            bool2str(val & (1 << bit)),
+            bool2str(val as u32 & (1 << bit)),
         ))
     }
     res

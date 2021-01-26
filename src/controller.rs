@@ -245,9 +245,7 @@ where
                     })
                     .unwrap(),
             ];
-            hdl.into_iter()
-                .map(|h| h.join().unwrap())
-                .collect::<Result<_>>()
+            hdl.into_iter().try_for_each(|h| h.join().unwrap())
         })
         .unwrap()
     }

@@ -25,7 +25,7 @@ use nom::character::streaming::{
 };
 use nom::combinator::{map, map_res, opt, recognize};
 use nom::multi::{many1, many_m_n};
-use nom::sequence::{delimited, preceded, terminated, tuple};
+use nom::sequence::{delimited, pair, preceded, terminated, tuple};
 
 fn contno(i: &str) -> PResult<u8> {
     map_res(terminated(digit1, cc('_')), |val: &str| val.parse())(i)
@@ -234,7 +234,7 @@ pub fn lst3(i: &str) -> PResult<List3> {
 pub struct Devstatus {
     pub contno: u8,
     pub addr: String,
-    pub val: u32,
+    pub val: i32,
 }
 
 pub fn devstatus(i: &str) -> PResult<Devstatus> {
@@ -243,13 +243,14 @@ pub fn devstatus(i: &str) -> PResult<Devstatus> {
             contno,
             recognize(many1(alt((alphanumeric1, tag("_"))))),
             cc('|'),
-            terminated(digit1, line_ending),
+            terminated(pair(opt(cc('-')), digit1), line_ending),
         )),
-        |(contno, busaddr, _, value)| -> Result<Devstatus> {
+        |(contno, busaddr, _, (sign, value))| -> Result<Devstatus> {
+            let val: i32 = value.parse()?;
             Ok(Devstatus {
                 contno,
                 addr: busaddr.into(),
-                val: value.parse()?,
+                val: if sign.is_some() { -val } else { val },
             })
         },
     )(i)
@@ -493,6 +494,20 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
                 contno: 2,
                 addr: "SYS3".into(),
                 val: 500
+            }
+        );
+    }
+
+    #[test]
+    fn parse_devstatus_neg() {
+        let (rem, mtch) = devstatus("3_OWD16_1|-847\n").unwrap();
+        assert!(rem.is_empty());
+        assert_eq!(
+            mtch,
+            Devstatus {
+                contno: 3,
+                addr: "OWD16_1".into(),
+                val: -847
             }
         );
     }

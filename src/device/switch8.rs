@@ -95,7 +95,7 @@ impl Device for Switch8 {
     fn handle_mqtt(&self, msg: MqttMsg, token: Token) -> Result<TwoWay> {
         let pl = msg.payload();
         Ok(match token {
-            i if i >= 0 && i < 8 => TwoWay::from_1wire(format!(
+            i @ 0..=7 => TwoWay::from_1wire(format!(
                 "SET,OWD,OUT,{},{},{}",
                 self.info.devno(),
                 i,
@@ -159,7 +159,7 @@ impl Device for Switch8Out {
     fn handle_mqtt(&self, msg: MqttMsg, token: Token) -> Result<TwoWay> {
         let pl = msg.payload();
         Ok(match token {
-            i if i >= 0 && i < 8 => TwoWay::from_1wire(format!(
+            i @ 0..=7 => TwoWay::from_1wire(format!(
                 "SET,OWD,OUT,{},{},{}",
                 self.info.devno(),
                 i,

@@ -134,12 +134,10 @@ impl Device for Controller2 {
     fn handle_mqtt(&self, msg: MqttMsg, token: Token) -> Result<TwoWay> {
         let pl = msg.payload();
         Ok(match token {
-            i if i >= 1 && i <= 5 => {
-                TwoWay::from_1wire(format!("SET,SYS,OUT,{},{}", i, str2bool(pl) as u8))
-            }
+            i @ 1..=5 => TwoWay::from_1wire(format!("SET,SYS,OUT,{},{}", i, str2bool(pl) as u8)),
             6 => {
                 let val: f32 = pl.parse().map_err(|_| Error::Value(pl.into()))?;
-                if val < 0.0 || val > 10.0 {
+                if !(0.0..=10.0).contains(&val) {
                     return Err(Error::Value(pl.into()));
                 } else {
                     TwoWay::from_1wire(format!("SET,SYS,OUTA,{}", float2centi(val)))

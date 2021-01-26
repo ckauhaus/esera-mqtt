@@ -8,17 +8,19 @@ pub type Token = i32;
 pub type Id<I> = (I, Token);
 
 // I: Index type, e.g. i32 or (usize, usize)
-pub struct Routes<I: Eq + Hash + Debug> {
+pub struct Routes<I> {
     by_topic: HashMap<String, Vec<Id<I>>>,
 }
 
-impl<I: Eq + Hash + Debug> Routes<I> {
+impl<I> Routes<I> {
     pub fn new() -> Self {
         Self {
             by_topic: HashMap::new(),
         }
     }
+}
 
+impl<I: Eq + Hash + Debug> Routes<I> {
     /// Adds subscription topic to the registry. If a specific topic has been mentioned for the
     /// first time, a MQTT subscribe message is emitted.
     pub fn register(&mut self, topic: String, id: Id<I>) -> Option<MqttMsg> {
@@ -35,6 +37,12 @@ impl<I: Eq + Hash + Debug> Routes<I> {
         self.by_topic.keys().map(|t| MqttMsg::Sub {
             topic: t.to_owned(),
         })
+    }
+}
+
+impl<I> Default for Routes<I> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
