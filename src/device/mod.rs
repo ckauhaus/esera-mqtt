@@ -1,5 +1,5 @@
-use crate::bus::Token;
-use crate::{DeviceInfo, MqttMsg, Response, Status, TwoWay};
+use crate::parser::OW;
+use crate::{DeviceInfo, MqttMsg, Status, Token, TwoWay};
 
 use enum_dispatch::enum_dispatch;
 use serde::Serialize;
@@ -102,7 +102,7 @@ pub trait Device {
     /// component.
     fn register_1wire(&self) -> Vec<String>;
 
-    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay>;
+    fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay>;
 
     /// Returns a list of topics which should be handled by this device. Each topic is assiociated
     /// with an opaque token which helps during event processing to associate the message to the
@@ -111,7 +111,7 @@ pub trait Device {
         Vec::default()
     }
 
-    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay> {
+    fn handle_mqtt(&self, _msg: &MqttMsg, _token: Token) -> Result<TwoWay> {
         Ok(TwoWay::default())
     }
 }
@@ -145,9 +145,10 @@ macro_rules! std_methods {
 }
 
 pub fn bool2str<N: Into<u32>>(n: N) -> &'static str {
-    match n.into() {
-        0 => "0",
-        _ => "1",
+    if n.into() == 0 {
+        "0"
+    } else {
+        "1"
     }
 }
 
@@ -186,7 +187,7 @@ fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: i32) -> TwoWa
     let mut res = TwoWay::default();
     for bit in 0..n {
         res += TwoWay::from_mqtt(MqttMsg::new(
-            info.fmt(format_args!("/{}/ch{}", inout, bit + 1)),
+            info.fmt(format_args!("{}/ch{}", inout, bit + 1)),
             bool2str(val as u32 & (1 << bit)),
         ))
     }
@@ -280,7 +281,7 @@ impl Device for Unknown {
         Vec::new()
     }
 
-    fn handle_1wire(&mut self, _resp: Response) -> Result<TwoWay> {
+    fn handle_1wire(&mut self, _resp: OW) -> Result<TwoWay> {
         Ok(TwoWay::default())
     }
 
@@ -288,7 +289,7 @@ impl Device for Unknown {
         Vec::default()
     }
 
-    fn handle_mqtt(&self, _msg: MqttMsg, _token: Token) -> Result<TwoWay> {
+    fn handle_mqtt(&self, _msg: &MqttMsg, _token: Token) -> Result<TwoWay> {
         Ok(TwoWay::default())
     }
 }

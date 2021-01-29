@@ -1,5 +1,6 @@
 use super::{digital_io, disc_topic, Result};
-use crate::{Device, DeviceInfo, MqttMsg, Response, TwoWay};
+use crate::parser::{Msg, OW};
+use crate::{Device, DeviceInfo, MqttMsg, TwoWay};
 
 use serde_json::json;
 
@@ -19,10 +20,10 @@ impl Device for BinarySensor {
         self.info.mkbusaddrs(&[1])
     }
 
-    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
-        Ok(match resp {
-            Response::Devstatus(s) => {
-                debug!("[{}] BinarySensor {} is {:b}", s.contno, s.addr, s.val);
+    fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
+        Ok(match resp.msg {
+            Msg::Devstatus(s) => {
+                debug!("[{}] BinarySensor {} is {:b}", resp.contno, s.addr, s.val);
                 match s.addr.rsplit('_').next().unwrap() {
                     "1" => digital_io(&self.info, 8, "in", s.val),
                     other => panic!("BUG: Unknown busaddr {}", other),
@@ -52,7 +53,7 @@ impl Device for BinarySensor {
                             "name": format!("In {}/{}.{}", self.info.contno, self.name(), ch),
                             "payload_off": "0",
                             "payload_on": "1",
-                            "state_topic": self.info.fmt(format_args!("/in/ch{}", ch)),
+                            "state_topic": self.info.fmt(format_args!("in/ch{}", ch)),
                             "unique_id": format!("{}_ch{}", self.info.serno, ch),
                         }))
                         .unwrap(),

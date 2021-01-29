@@ -1,5 +1,6 @@
 use super::{centi2float, AnnounceDevice, Result};
-use crate::{Device, DeviceInfo, MqttMsg, Response, TwoWay};
+use crate::parser::{Msg, OW};
+use crate::{Device, DeviceInfo, MqttMsg, TwoWay};
 use serde_json::json;
 
 macro_rules! handlers {
@@ -10,9 +11,9 @@ macro_rules! handlers {
             res
         }
 
-        fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
-            Ok(match resp {
-                Response::Devstatus(s) => match
+        fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
+            Ok(match resp.msg {
+                Msg::Devstatus(s) => match
                     s.addr
                         .rsplit('_')
                         .nth(0)

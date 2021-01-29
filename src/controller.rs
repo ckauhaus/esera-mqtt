@@ -1,4 +1,4 @@
-use crate::parser::{self, Response};
+use crate::parser::{self, Msg, OW};
 use crate::pick;
 
 use chrono::Local;
@@ -23,7 +23,7 @@ pub enum Error {
     #[error("Controller connection lost while waiting for response")]
     Disconnected,
     #[error("Controller communication protocol error ({0})")]
-    Controller(u8),
+    Controller(u16),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -33,7 +33,7 @@ pub struct ControllerConnection<S>
 where
     S: Read + Write + fmt::Debug,
 {
-    pub queue: Mutex<VecDeque<Result<Response>>>,
+    pub queue: Mutex<VecDeque<Result<OW>>>,
     pub contno: u8,
     partial: Mutex<String>,
     reader: Mutex<S>,
@@ -77,7 +77,7 @@ impl ControllerConnection<TcpStream> {
 }
 
 /// Moves raw data out of `partial` as far as the parser allows.
-fn munch(partial: &mut String) -> Option<Result<Response>> {
+fn munch(partial: &mut String) -> Option<Result<OW>> {
     let res = parser::parse(partial).map(|(rem, resp)| (rem.len(), resp));
     match res {
         Ok((rem, resp)) => {
@@ -139,7 +139,7 @@ where
         Ok(true)
     }
 
-    pub fn get(&self) -> Option<Result<Response>> {
+    pub fn get(&self) -> Option<Result<OW>> {
         while self.queue.lock().is_empty() {
             thread::sleep(Duration::from_millis(10));
             match self.receive() {
@@ -151,49 +151,48 @@ where
         self.queue.lock().pop_front()
     }
 
-    pub fn csi(&mut self) -> Result<parser::CSI> {
+    pub fn csi(&mut self) -> Result<OW> {
         self.send_line("GET,SYS,INFO")?;
         let csi = pick!(&self, CSI)?;
         self.contno = csi.contno;
         Ok(csi)
     }
 
-    pub fn list(&self) -> Result<parser::List3> {
+    pub fn list(&self) -> Result<OW> {
         self.send_line("GET,OWB,LISTALL1")?;
         pick!(&self, List3)
     }
 }
 
 /// Usage: pick!(&mut conn, RESPONSE_VARIANT) -> Result<RESPONSE_TYPE>
+// XXX rewrite with MsgKind
 #[macro_export]
 macro_rules! pick {
     ($conn:expr, $res:tt) => {
-        (|| {
-            let found = 'outer: loop {
-                for (i, item) in $conn.queue.lock().iter().enumerate() {
+        (|| loop {
+            {
+                let mut queue = $conn.queue.lock();
+                for (i, item) in queue.iter().enumerate() {
                     if let Ok(resp) = item {
                         match resp {
-                            Response::$res(_) => break 'outer Ok(i),
-                            Response::Err(e) => return Err(Error::Controller(*e)),
+                            OW {
+                                msg: Msg::$res(_), ..
+                            } => return queue.remove(i).unwrap(),
+                            OW {
+                                msg: Msg::Err(e), ..
+                            } => return Err(Error::Controller(*e)),
                             _ => (),
                         }
                     }
                 }
-                // item not already present in queue, wait for more data
-                std::thread::sleep(Duration::from_millis(10));
-                match $conn.receive() {
-                    Ok(true) => (),
-                    Ok(false) => break Err(Error::Disconnected),
-                    Err(e) => break Err(e),
-                }
-            };
-            found.map(|i| {
-                if let Response::$res(val) = $conn.queue.lock().remove(i).unwrap().unwrap() {
-                    val
-                } else {
-                    panic!("internal error: matched item {} disappeared from queue", i)
-                }
-            })
+            }
+            // item not already present in queue, wait for more data
+            std::thread::sleep(Duration::from_millis(10));
+            match $conn.receive() {
+                Ok(true) => (),
+                Ok(false) => return Err(Error::Disconnected),
+                Err(e) => return Err(e),
+            }
         })()
     };
 }
@@ -202,7 +201,7 @@ impl<S> ControllerConnection<S>
 where
     S: Read + Write + fmt::Debug + Send,
 {
-    pub fn event_loop(&self, up: Receiver<String>, down: Sender<Result<Response>>) -> Result<()> {
+    pub fn event_loop(&self, up: Receiver<String>, down: Sender<Result<OW>>) -> Result<()> {
         let done = AtomicCell::new(false);
         crossbeam::scope(|sc| {
             let hdl = vec![
@@ -220,7 +219,7 @@ where
                                 return Ok(());
                             }
                         }
-                        warn!("[{}] Controller connection unexpectly lost", self.contno);
+                        warn!("[{}] Controller connection unexpectely lost", self.contno);
                         done.store(true);
                         Err(Error::Disconnected)
                     })
@@ -255,7 +254,7 @@ impl<S> Iterator for ControllerConnection<S>
 where
     S: Read + Write + fmt::Debug,
 {
-    type Item = Result<Response>;
+    type Item = Result<OW>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.get()
@@ -276,7 +275,7 @@ mod test {
             Cursor::new(B("1_EVT|21:02:43\n").to_vec()),
             Cursor::new(Vec::new()),
         );
-        assert_matches!(c.next(), Some(Ok(Response::Event(_))));
+        assert_matches!(c.next(), Some(Ok(OW { msg: Msg::Evt(_), ..})));
     }
 
     #[test]
@@ -295,23 +294,24 @@ mod test {
             Cursor::new(Vec::new()),
         );
         assert_matches!(c.next(), Some(Err(Error::Parse(_))));
-        assert_matches!(c.next(), Some(Ok(Response::Info(_))));
+        assert_matches!(c.next(), Some(Ok(OW { msg: Msg::Inf(_), ..})));
         assert_matches!(c.next(), None);
     }
 
     #[test]
     fn pick_should_return_match() {
-        let mut c = ControllerConnection::from_streams(
+        let c = ControllerConnection::from_streams(
             Cursor::new(B("1_DATE|20.09.20\n").to_vec()),
             Cursor::new(Vec::new()),
         );
-        assert_eq!(pick!(&mut c, Date).unwrap(), "20.09.20".to_string());
+        let res = pick!(c, Date).unwrap();
+        assert_eq!(res.msg, Msg::Date("20.09.20".into()));
         assert!(c.queue.lock().is_empty());
     }
 
     #[test]
     fn wait_should_cut_out_match() {
-        let mut c = ControllerConnection::from_streams(
+        let c = ControllerConnection::from_streams(
             Cursor::new(
                 B("1_KAL|1\n\
                1_DATAPRINT|1\n\
@@ -320,14 +320,11 @@ mod test {
             ),
             Cursor::new(Vec::new()),
         );
-        assert_eq!(pick!(&mut c, Dataprint).unwrap().flag, '1');
-        assert_eq!(
-            c.queue
-                .into_inner()
-                .into_iter()
-                .map(|r| r.unwrap())
-                .collect::<Vec<Response>>(),
-            vec![Response::Keepalive(1), Response::Date("07.11.20".into())]
-        );
+        let res = pick!(c, Dataprint).unwrap();
+        assert_matches!(res, OW { msg: Msg::Dataprint('1'), ..});
+        let mut q = c.queue.into_inner().into_iter().map(|r| r.unwrap());
+        assert_eq!(q.next().unwrap().msg, Msg::Keepalive('1'));
+        assert_eq!(q.next().unwrap().msg, Msg::Date("07.11.20".into()));
+        assert_eq!(q.next(), None);
     }
 }

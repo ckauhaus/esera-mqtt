@@ -18,6 +18,33 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 pub type PResult<'i, O> = nom::IResult<&'i str, O, nom::error::VerboseError<&'i str>>;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct OW {
+    pub contno: u8,
+    pub msg: Msg,
+}
+
+#[derive(Debug, Clone, PartialEq, EnumDiscriminants)]
+#[strum_discriminants(name(MsgKind))]
+pub enum Msg {
+    Keepalive(Keepalive),
+    Inf(Inf),
+    Err(Err),
+    Evt(Evt),
+    Rst(Rst),
+    Rdy(Rdy),
+    Save(Save),
+    Dataprint(Dataprint),
+    Datatime(Datatime),
+    Date(Date),
+    Time(Time),
+    List3(List3),
+    CSI(CSI),
+    DIO(DIO),
+    OWDStatus(OWDStatus),
+    Devstatus(Devstatus),
+}
+
 use nom::branch::alt;
 use nom::bytes::streaming::tag;
 use nom::character::streaming::{
@@ -43,91 +70,142 @@ fn val<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, &'a str> {
     delimited(header(key), not_line_ending, line_ending)
 }
 
-pub type Keepalive = u8;
-
-pub fn kal(i: &str) -> PResult<Keepalive> {
-    terminated(header("KAL"), remainder)(i)
-}
-
 fn timeval(i: &str) -> PResult<&str> {
     recognize(many1(one_of("0123456789:")))(i)
 }
 
-pub type Info = String;
+pub type Keepalive = char;
 
-pub fn inf(i: &str) -> PResult<Info> {
-    map(delimited(header("INF"), timeval, line_ending), String::from)(i)
+pub fn kal(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("KAL"), terminated(one_of("01"), line_ending))),
+        |(contno, flag)| OW {
+            contno,
+            msg: Msg::Keepalive(flag),
+        },
+    )(i)
+}
+
+pub type Inf = String;
+
+pub fn inf(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("INF"), terminated(timeval, line_ending))),
+        |(contno, dt)| OW {
+            contno,
+            msg: Msg::Inf(Inf::from(dt)),
+        },
+    )(i)
 }
 
 /// Controller error. The number denotes the erronous command component
-pub type Err = u8;
+pub type Err = u16;
 
-pub fn err(i: &str) -> PResult<Err> {
-    map_res(delimited(header("ERR"), digit1, line_ending), |v| v.parse())(i)
+pub fn err(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("ERR"), terminated(digit1, line_ending))),
+        |(contno, v)| OW {
+            contno,
+            msg: Msg::Err(v.parse().expect("16-bit integer")),
+        },
+    )(i)
 }
 
-pub type Event = String;
+pub type Evt = String;
 
-pub fn evt(i: &str) -> PResult<Event> {
-    map(delimited(header("EVT"), timeval, line_ending), String::from)(i)
+pub fn evt(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("EVT"), terminated(timeval, line_ending))),
+        |(contno, dt)| OW {
+            contno,
+            msg: Msg::Evt(Evt::from(dt)),
+        },
+    )(i)
 }
 
 pub type Rst = char;
 
-pub fn rst(i: &str) -> PResult<Rst> {
-    delimited(header("RST"), one_of("01"), line_ending)(i)
+pub fn rst(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("RST"), terminated(one_of("01"), line_ending))),
+        |(contno, flag)| OW {
+            contno,
+            msg: Msg::Rst(flag),
+        },
+    )(i)
 }
+
 pub type Rdy = char;
 
-pub fn rdy(i: &str) -> PResult<Rdy> {
-    delimited(header("RDY"), one_of("01"), line_ending)(i)
+pub fn rdy(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("RDY"), terminated(one_of("01"), line_ending))),
+        |(contno, flag)| OW {
+            contno,
+            msg: Msg::Rdy(flag),
+        },
+    )(i)
 }
 pub type Save = char;
 
-pub fn save(i: &str) -> PResult<Save> {
-    delimited(header("SAVE"), one_of("01"), line_ending)(i)
+pub fn save(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("SAVE"), terminated(one_of("01"), line_ending))),
+        |(contno, flag)| OW {
+            contno,
+            msg: Msg::Save(flag),
+        },
+    )(i)
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Dataprint {
-    pub contno: u8,
-    pub flag: char,
-}
+pub type Dataprint = char;
 
-pub fn dataprint(i: &str) -> PResult<Dataprint> {
+pub fn dataprint(i: &str) -> PResult<OW> {
     map(
         tuple((header("DATAPRINT"), terminated(one_of("01"), line_ending))),
-        |(contno, flag)| Dataprint { contno, flag },
+        |(contno, flag)| OW {
+            contno,
+            msg: Msg::Dataprint(flag),
+        },
     )(i)
 }
 
 pub type Datatime = u8;
 
-pub fn datatime(i: &str) -> PResult<Datatime> {
-    map(delimited(header("DATATIME"), digit1, line_ending), |s| {
-        s.parse().unwrap()
-    })(i)
+pub fn datatime(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("DATATIME"), terminated(digit1, line_ending))),
+        |(contno, s)| OW {
+            contno,
+            msg: Msg::Datatime(s.parse().expect("8-bit integer")),
+        },
+    )(i)
 }
 
 pub type Date = String;
 
-pub fn date(i: &str) -> PResult<Date> {
+pub fn date(i: &str) -> PResult<OW> {
     map(
-        delimited(
+        tuple((
             header("DATE"),
-            recognize(many1(one_of("0123456789."))),
-            line_ending,
-        ),
-        String::from,
+            terminated(recognize(many1(one_of("0123456789."))), line_ending),
+        )),
+        |(contno, d)| OW {
+            contno,
+            msg: Msg::Date(Date::from(d)),
+        },
     )(i)
 }
 
 pub type Time = String;
 
-pub fn time(i: &str) -> PResult<Time> {
+pub fn time(i: &str) -> PResult<OW> {
     map(
-        delimited(header("TIME"), timeval, line_ending),
-        String::from,
+        tuple((header("TIME"), terminated(timeval, line_ending))),
+        |(contno, t)| OW {
+            contno,
+            msg: Msg::Time(Time::from(t)),
+        },
     )(i)
 }
 
@@ -139,10 +217,9 @@ pub struct CSI {
     pub serno: String,
     pub fw: String,
     pub hw: String,
-    pub contno: u8,
 }
 
-pub fn csi(i: &str) -> PResult<CSI> {
+pub fn csi(i: &str) -> PResult<OW> {
     map(
         tuple((
             val("CSI"),
@@ -154,14 +231,16 @@ pub fn csi(i: &str) -> PResult<CSI> {
             val("HW"),
             delimited(header("CONTNO"), digit1, line_ending),
         )),
-        |(_csi, date, time, artno, serno, fw, hw, contno)| CSI {
-            date: String::from(date),
-            time: String::from(time),
-            artno: String::from(artno),
-            serno: String::from(serno),
-            fw: String::from(fw),
-            hw: String::from(hw),
-            contno: contno.parse().unwrap(),
+        |(_csi, date, time, artno, serno, fw, hw, contno)| OW {
+            contno: contno.parse().expect("8-bit integer"),
+            msg: Msg::CSI(CSI {
+                date: String::from(date),
+                time: String::from(time),
+                artno: String::from(artno),
+                serno: String::from(serno),
+                fw: String::from(fw),
+                hw: String::from(hw),
+            }),
         },
     )(i)
 }
@@ -192,13 +271,9 @@ impl Default for Status {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct List3 {
-    pub contno: u8,
-    pub items: Vec<DeviceInfo>,
-}
+pub type List3 = Vec<DeviceInfo>;
 
-pub fn lst3(i: &str) -> PResult<List3> {
+pub fn lst3(i: &str) -> PResult<OW> {
     let (i, contno) = terminated(header("LST3"), remainder)(i)?;
     let head = format!("LST|{}_", contno);
     let (i, items) = many_m_n(
@@ -213,9 +288,8 @@ pub fn lst3(i: &str) -> PResult<List3> {
                 opt(preceded(cc('|'), not_line_ending)),
                 line_ending,
             )),
-            |(busid, serno, status, artno, name, _nl)| -> Result<_, Error> {
+            |(busid, serno, status, artno, name, _nl)| -> Result<_> {
                 Ok(DeviceInfo {
-                    contno,
                     busid: String::from(busid),
                     serno: String::from(serno),
                     status: status.parse()?,
@@ -223,21 +297,27 @@ pub fn lst3(i: &str) -> PResult<List3> {
                     name: name
                         .filter(|s| !s.trim().is_empty())
                         .map(|n| String::from(n.trim())),
+                    contno,
                 })
             },
         ),
     )(i)?;
-    Ok((i, List3 { contno, items }))
+    Ok((
+        i,
+        OW {
+            contno,
+            msg: Msg::List3(items),
+        },
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Devstatus {
-    pub contno: u8,
     pub addr: String,
     pub val: i32,
 }
 
-pub fn devstatus(i: &str) -> PResult<Devstatus> {
+pub fn devstatus(i: &str) -> PResult<OW> {
     map_res(
         tuple((
             contno,
@@ -245,19 +325,21 @@ pub fn devstatus(i: &str) -> PResult<Devstatus> {
             cc('|'),
             terminated(pair(opt(cc('-')), digit1), line_ending),
         )),
-        |(contno, busaddr, _, (sign, value))| -> Result<Devstatus> {
+        |(contno, busaddr, _, (sign, value))| -> Result<_> {
             let val: i32 = value.parse()?;
-            Ok(Devstatus {
+            Ok(OW {
                 contno,
-                addr: busaddr.into(),
-                val: if sign.is_some() { -val } else { val },
+                msg: Msg::Devstatus(Devstatus {
+                    addr: busaddr.into(),
+                    val: if sign.is_some() { -val } else { val },
+                }),
             })
         },
     )(i)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, EnumString, AsRefStr, IntoStaticStr)]
-pub enum DIOStatus {
+pub enum DIO {
     #[strum(serialize = "0", to_string = "Independent+Level")]
     IndependentLevel,
     #[strum(serialize = "1", to_string = "Independent+Edge")]
@@ -268,31 +350,25 @@ pub enum DIOStatus {
     LinkedEdge,
 }
 
-impl Default for DIOStatus {
+impl Default for DIO {
     fn default() -> Self {
-        DIOStatus::IndependentLevel
+        DIO::IndependentLevel
     }
 }
 
-impl Into<String> for DIOStatus {
+impl Into<String> for DIO {
     fn into(self) -> String {
         self.to_string()
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DIO {
-    pub contno: u8,
-    pub status: DIOStatus,
-}
-
-pub fn dio(i: &str) -> PResult<DIO> {
+pub fn dio(i: &str) -> PResult<OW> {
     map_res(
         tuple((contno, delimited(tag("DIO|"), digit1, line_ending))),
-        |(c, n)| -> Result<DIO> {
-            Ok(DIO {
-                contno: c,
-                status: n.parse()?,
+        |(contno, n)| -> Result<_> {
+            Ok(OW {
+                contno,
+                msg: Msg::DIO(n.parse()?),
             })
         },
     )(i)
@@ -300,66 +376,33 @@ pub fn dio(i: &str) -> PResult<DIO> {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OWDStatus {
-    pub contno: u8,
     pub owd: u8,
     pub status: Status,
 }
 
-pub fn owdstatus(i: &str) -> PResult<OWDStatus> {
+pub fn owdstatus(i: &str) -> PResult<OW> {
     map_res(
         tuple((
             contno,
             delimited(tag("OWD_"), digit1, cc('|')),
             terminated(digit1, line_ending),
         )),
-        |(c, n, s)| -> Result<OWDStatus> {
-            Ok(OWDStatus {
-                contno: c,
-                owd: n.parse()?,
-                status: s.parse()?,
+        |(contno, n, s)| -> Result<_> {
+            Ok(OW {
+                contno,
+                msg: Msg::OWDStatus(OWDStatus {
+                    owd: n.parse()?,
+                    status: s.parse()?,
+                }),
             })
         },
     )(i)
 }
-#[derive(Debug, Clone, PartialEq, EnumDiscriminants)]
-#[strum_discriminants(name(ResponseKind))]
-pub enum Response {
-    Keepalive(Keepalive),
-    Info(Info),
-    Err(Err),
-    Event(Event),
-    Rst(Rst),
-    Rdy(Rdy),
-    Save(Save),
-    Dataprint(Dataprint),
-    Datatime(Datatime),
-    Date(Date),
-    Time(Time),
-    List3(List3),
-    CSI(CSI),
-    DIO(DIO),
-    OWDStatus(OWDStatus),
-    Devstatus(Devstatus),
-}
 
-pub fn parse(i: &str) -> PResult<Response> {
+pub fn parse(i: &str) -> PResult<OW> {
     alt((
-        map(kal, Response::Keepalive),
-        map(inf, Response::Info),
-        map(err, Response::Err),
-        map(evt, Response::Event),
-        map(rst, Response::Rst),
-        map(rdy, Response::Rdy),
-        map(save, Response::Save),
-        map(dataprint, Response::Dataprint),
-        map(datatime, Response::Datatime),
-        map(date, Response::Date),
-        map(time, Response::Time),
-        map(lst3, Response::List3),
-        map(csi, Response::CSI),
-        map(dio, Response::DIO),
-        map(owdstatus, Response::OWDStatus),
-        map(devstatus, Response::Devstatus),
+        kal, inf, err, evt, rst, rdy, save, dataprint, datatime, date, time, lst3, csi, dio,
+        owdstatus, devstatus,
     ))(i)
 }
 
@@ -372,7 +415,16 @@ mod test {
 
     #[test]
     fn parse_keepalive() {
-        assert_eq!(kal("1_KAL|1\n").unwrap(), ("", 1));
+        assert_matches!(
+            kal("1_KAL|1\n").unwrap(),
+            (
+                "",
+                OW {
+                    msg: Msg::Keepalive('1'),
+                    contno: 1
+                },
+            )
+        );
     }
 
     #[test]
@@ -383,35 +435,29 @@ mod test {
     #[test]
     fn parse_dataprint() {
         assert_eq!(
-            dataprint("1_DATAPRINT|1\n").unwrap(),
-            (
-                "",
-                Dataprint {
-                    contno: 1,
-                    flag: '1'
-                }
-            )
+            dataprint("1_DATAPRINT|1\n").unwrap().1.msg,
+            Msg::Dataprint('1')
         );
     }
 
     #[test]
     fn parse_date() {
         assert_eq!(
-            date("2_DATE|03.11.20\n").unwrap(),
-            ("", "03.11.20".to_owned())
+            date("2_DATE|03.11.20\n").unwrap().1.msg,
+            Msg::Date("03.11.20".to_owned())
         );
     }
 
     #[test]
     fn parse_time() {
         assert_eq!(
-            time("3_TIME|0:00:52\n").unwrap(),
-            ("", "0:00:52".to_owned())
+            time("3_TIME|0:00:52\n").unwrap().1.msg,
+            Msg::Time("0:00:52".to_owned())
         );
     }
 
     #[test]
-    fn signal_incomplete_list() {
+    fn incomplete_list() {
         let input = "\
 1_LST3|0:02:54\n\
 LST|1_OWD1|EF000019096A4026|S_0|11150\n";
@@ -432,9 +478,9 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
         assert_eq!(rem, "1_EVT|0:02:55\n");
         assert_eq!(
             mtch,
-            List3 {
+            OW {
                 contno: 1,
-                items: vec![
+                msg: Msg::List3(vec![
                     DeviceInfo {
                         contno: 1,
                         busid: "OWD1".into(),
@@ -459,85 +505,72 @@ LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
                         artno: "none".into(),
                         name: None
                     },
-                ]
+                ])
             }
         );
     }
 
     #[test]
-    fn parse_devstatus() {
-        let (rem, mtch) = devstatus("1_OWD12_3|2\n").unwrap();
-        assert!(rem.is_empty());
+    fn parse_devstatus_numeric() {
         assert_eq!(
-            mtch,
-            Devstatus {
-                contno: 1,
-                addr: "OWD12_3".into(),
-                val: 2
-            }
+            devstatus("1_OWD12_3|2\n").unwrap(),
+            (
+                "",
+                OW {
+                    contno: 1,
+                    msg: Msg::Devstatus(Devstatus {
+                        addr: "OWD12_3".into(),
+                        val: 2
+                    })
+                }
+            )
         );
-        let (rem, mtch) = devstatus("1_OWD14_4|10000100\n").unwrap();
-        assert!(rem.is_empty());
+    }
+
+    #[test]
+    fn parse_devstatus_sys() {
         assert_eq!(
-            mtch,
-            Devstatus {
-                contno: 1,
-                addr: "OWD14_4".into(),
-                val: 10000100
-            }
-        );
-        let (rem, mtch) = devstatus("2_SYS3|500\n").unwrap();
-        assert!(rem.is_empty());
-        assert_eq!(
-            mtch,
-            Devstatus {
-                contno: 2,
+            devstatus("2_SYS3|500\n").unwrap().1.msg,
+            Msg::Devstatus(Devstatus {
                 addr: "SYS3".into(),
                 val: 500
-            }
+            })
         );
     }
 
     #[test]
     fn parse_devstatus_neg() {
-        let (rem, mtch) = devstatus("3_OWD16_1|-847\n").unwrap();
-        assert!(rem.is_empty());
         assert_eq!(
-            mtch,
-            Devstatus {
-                contno: 3,
+            devstatus("3_OWD16_1|-847\n").unwrap().1.msg,
+            Msg::Devstatus(Devstatus {
                 addr: "OWD16_1".into(),
                 val: -847
-            }
+            })
         );
     }
 
     #[test]
     fn parse_dio() {
-        let (rem, mtch) = dio("3_DIO|1\n").unwrap();
-        assert!(rem.is_empty());
         assert_eq!(
-            mtch,
-            DIO {
+            dio("3_DIO|1\n").unwrap().1,
+            OW {
                 contno: 3,
-                status: DIOStatus::IndependentEdge
+                msg: Msg::DIO(DIO::IndependentEdge)
             }
         );
-        let (_, mtch) = parse("1_DIO|0\n").unwrap();
-        assert_matches!(mtch, Response::DIO(_));
     }
 
     #[test]
     fn parse_status() {
-        let (rem, mtch) = parse("1_OWD_2|5\n").unwrap();
-        assert!(rem.is_empty());
         assert_eq!(
-            mtch,
-            Response::OWDStatus(OWDStatus {
-                contno: 1,
-                owd: 2,
-                status: Status::Offline
-            })
-        );
+            parse("4_OWD_2|5\n").unwrap().1,
+            OW {
+                contno: 4,
+                msg: Msg::OWDStatus(OWDStatus {
+                    owd: 2,
+                    status: Status::Offline
+                })
+            }
+        )
     }
 }

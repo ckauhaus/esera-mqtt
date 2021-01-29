@@ -6,12 +6,12 @@ mod mqtt;
 mod parser;
 mod routing;
 
-pub use bus::Universe;
+pub use bus::Bus;
 pub use controller::ControllerConnection;
 pub use controller::Error as ControllerError;
 pub use device::{bool2str, str2bool, AnnounceDevice, Device};
 pub use mqtt::{MqttConnection, MqttMsg};
-pub use parser::{Response, Status, CSI};
+pub use parser::{Status, CSI, OW};
 pub use routing::{Routes, Token};
 
 #[macro_use]
@@ -51,7 +51,7 @@ impl DeviceInfo {
     /// Format MQTT message topic relating to this device
     fn fmt(&self, args: fmt::Arguments) -> String {
         format!(
-            "ESERA/{}/{}{}",
+            "ESERA/{}/{}/{}",
             self.contno,
             self.name.as_ref().unwrap_or(&self.busid),
             args

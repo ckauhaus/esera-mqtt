@@ -8,11 +8,12 @@ pub type Token = i32;
 pub type Id<I> = (I, Token);
 
 // I: Index type, e.g. i32 or (usize, usize)
-pub struct Routes<I> {
+#[derive(Debug)]
+pub struct Routes<I: Debug> {
     by_topic: HashMap<String, Vec<Id<I>>>,
 }
 
-impl<I> Routes<I> {
+impl<I: Debug> Routes<I> {
     pub fn new() -> Self {
         Self {
             by_topic: HashMap::new(),
@@ -33,6 +34,20 @@ impl<I: Eq + Hash + Debug> Routes<I> {
         }
     }
 
+    /// Returns recipients list if a topic is found and an empty slice otherwise.
+    ///
+    /// # Example
+    /// for (idx, token) in routes.lookup(topic) {
+    ///   dev[idx].process(token)
+    /// }
+    pub fn lookup(&self, topic: &str) -> &[Id<I>] {
+        if let Some(elem) = self.by_topic.get(topic) {
+            elem
+        } else {
+            &[]
+        }
+    }
+
     pub fn subscriptions(&self) -> impl Iterator<Item = MqttMsg> + '_ {
         self.by_topic.keys().map(|t| MqttMsg::Sub {
             topic: t.to_owned(),
@@ -40,7 +55,7 @@ impl<I: Eq + Hash + Debug> Routes<I> {
     }
 }
 
-impl<I> Default for Routes<I> {
+impl<I: Debug> Default for Routes<I> {
     fn default() -> Self {
         Self::new()
     }

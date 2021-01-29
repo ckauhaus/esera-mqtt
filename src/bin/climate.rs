@@ -36,11 +36,11 @@ impl Configs {
 }
 
 #[derive(Debug, Clone, Default)]
-struct Controllers {
+struct HVACs {
     ctrl: Vec<Climate>,
 }
 
-impl Controllers {
+impl HVACs {
     fn new(c: Configs) -> Self {
         Self {
             ctrl: c.0.into_iter().map(|(n, t)| Climate::new(n, t)).collect(),
@@ -62,16 +62,21 @@ impl Controllers {
         self.ctrl.iter().flat_map(|c| c.eval())
     }
 
-    fn process(&mut self, idx: usize, tok: Token, topic: &str, payload: &str) -> Vec<MqttMsg> {
-        let res = self.ctrl[idx].process(tok, topic, payload);
-        match res {
-            Ok(resp) => resp,
+    fn process(
+        &mut self,
+        idx: usize,
+        tok: Token,
+        topic: &str,
+        payload: &str,
+    ) -> Box<dyn Iterator<Item = MqttMsg>> {
+        match self.ctrl[idx].process(tok, topic, payload) {
+            Ok(resp) => Box::new(resp.into_iter()),
             Err(e) => {
                 error!(
                     "Failed to process MQTT message ({} {}): {}",
                     topic, payload, e
                 );
-                Vec::new()
+                Box::new(std::iter::empty())
             }
         }
     }
@@ -97,21 +102,17 @@ fn run(opt: Opt) -> Result<()> {
     let (mut mqtt, recv) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
     mqtt.send(MqttMsg::retain(format!("{}/status", BASE), "online"))
         .context("Cannot set status to online")?;
-    let mut controllers = Controllers::new(configs);
+    let mut hvacs = HVACs::new(configs);
     let mut routes = Routes::new();
-    for msg in controllers
-        .subscribe_topics()
-        .flat_map(|(idx, token, topic)| routes.register(topic, (idx, token)))
-    {
-        mqtt.send(msg)?
-    }
+    mqtt.sendall(
+        hvacs
+            .subscribe_topics()
+            .flat_map(|(idx, token, topic)| routes.register(topic, (idx, token))),
+    )?;
     // publish autoconfig entries
-    for msg in controllers.announce() {
-        mqtt.send(msg)?;
-    }
-    for msg in controllers.eval() {
-        mqtt.send(msg)?;
-    }
+    mqtt.sendall(hvacs.announce())?;
+    // set initial state
+    mqtt.sendall(hvacs.eval())?;
     info!("Entering main loop");
     for msg in recv {
         match msg {
@@ -122,10 +123,7 @@ fn run(opt: Opt) -> Result<()> {
             } => {
                 if let Some(xs) = routes.get(topic) {
                     for (idx, tok) in xs {
-                        let resp = controllers.process(*idx, *tok, topic, payload);
-                        for r in resp {
-                            mqtt.send(r)?;
-                        }
+                        mqtt.sendall(hvacs.process(*idx, *tok, topic, payload))?;
                     }
                 }
             }

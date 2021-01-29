@@ -1,12 +1,13 @@
 use super::{centi2float, digital_io, disc_topic, float2centi, str2bool, Error, Result, Token};
-use crate::{parser::DIOStatus, Device, DeviceInfo, MqttMsg, Response, TwoWay};
+use crate::parser::{Msg, DIO, OW};
+use crate::{Device, DeviceInfo, MqttMsg, TwoWay};
 
 use serde_json::json;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Controller2 {
     info: DeviceInfo,
-    dio: DIOStatus,
+    dio: DIO,
     sw_version: String,
 }
 
@@ -25,19 +26,19 @@ impl Device for Controller2 {
         vec!["SYS1_1".into(), "SYS2_1".into(), "SYS3".into()]
     }
 
-    fn handle_1wire(&mut self, resp: Response) -> Result<TwoWay> {
-        Ok(match resp {
-            Response::CSI(csi) => {
+    fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
+        Ok(match resp.msg {
+            Msg::CSI(csi) => {
                 self.sw_version = csi.fw;
                 TwoWay::mqtt(self.announce())
             }
-            Response::DIO(dio) => {
-                debug!("[{}] DIO status: {}", dio.contno, dio.status);
-                self.dio = dio.status;
-                TwoWay::from_mqtt(self.info.mqtt_msg("dio", dio.status))
+            Msg::DIO(dio) => {
+                debug!("[{}] DIO status: {}", resp.contno, dio);
+                self.dio = dio;
+                TwoWay::from_mqtt(self.info.mqtt_msg("dio", dio))
             }
-            Response::Devstatus(s) => {
-                debug!("[{}] Controller2 {} => {:b}", s.contno, s.addr, s.val);
+            Msg::Devstatus(s) => {
+                debug!("[{}] Controller2 {} => {:b}", resp.contno, s.addr, s.val);
                 match s.addr.as_ref() {
                     "SYS1_1" => digital_io(&self.info, 4, "in", s.val),
                     "SYS2_1" => digital_io(&self.info, 5, "out", s.val),
@@ -71,7 +72,7 @@ impl Device for Controller2 {
                     "device": &dev,
                     "automation_type": "trigger",
                     "payload": pl,
-                    "topic": self.info.fmt(format_args!("/in/ch{}", ch)),
+                    "topic": self.info.fmt(format_args!("in/ch{}", ch)),
                     "type": format!("button_{}_{}", dur, dir),
                     "subtype": format!("button_{}", ch),
                 }))
@@ -79,8 +80,8 @@ impl Device for Controller2 {
             )
         };
         let dur = match self.dio {
-            DIOStatus::LinkedEdge | DIOStatus::IndependentEdge => "short",
-            DIOStatus::LinkedLevel | DIOStatus::IndependentLevel => "long",
+            DIO::LinkedEdge | DIO::IndependentEdge => "short",
+            DIO::LinkedLevel | DIO::IndependentLevel => "long",
         };
         for ch in 1..=4 {
             for (dir, pl) in &[("press", "1"), ("release", "0")] {
@@ -92,8 +93,8 @@ impl Device for Controller2 {
                 disc_topic("switch", &self.info, format_args!("ch{}", ch)),
                 serde_json::to_string(&json!({
                         "availability_topic": self.info.topic("status"),
-                        "command_topic": self.info.fmt(format_args!("/set/ch{}", ch)),
-                        "state_topic": self.info.fmt(format_args!("/out/ch{}", ch)),
+                        "command_topic": self.info.fmt(format_args!("set/ch{}", ch)),
+                        "state_topic": self.info.fmt(format_args!("out/ch{}", ch)),
                         "device": &dev,
                         "name": format!("Controller.{} out {}", self.info.contno, ch),
                         "payload_on": "1",
@@ -108,11 +109,11 @@ impl Device for Controller2 {
             disc_topic("light", &self.info, format_args!("ana")),
             serde_json::to_string(&json!({
                     "availability_topic": self.info.topic("status"),
-                    "brightness_command_topic": self.info.topic("/set/ana"),
-                    "brightness_state_topic": self.info.topic("/out/ana"),
+                    "brightness_command_topic": self.info.topic("set/ana"),
+                    "brightness_state_topic": self.info.topic("out/ana"),
                     "brightness_scale": 10.0,
                     "device": &dev,
-                    "command_topic": self.info.topic("/set/ana"),
+                    "command_topic": self.info.topic("set/ana"),
                     "name": format!("Controller.{} analog out", self.info.contno),
                     "unique_id": format!("{}_ana", self.info.serno)
                 }
@@ -125,13 +126,13 @@ impl Device for Controller2 {
     fn register_mqtt(&self) -> Vec<(String, Token)> {
         let mut t = Vec::with_capacity(20);
         for i in 1..=5 {
-            t.push((self.info.fmt(format_args!("/set/ch{}", i)), i));
+            t.push((self.info.fmt(format_args!("set/ch{}", i)), i));
         }
         t.push((self.info.topic("set/ana"), 6));
         t
     }
 
-    fn handle_mqtt(&self, msg: MqttMsg, token: Token) -> Result<TwoWay> {
+    fn handle_mqtt(&self, msg: &MqttMsg, token: Token) -> Result<TwoWay> {
         let pl = msg.payload();
         Ok(match token {
             i @ 1..=5 => TwoWay::from_1wire(format!("SET,SYS,OUT,{},{}", i, str2bool(pl) as u8)),

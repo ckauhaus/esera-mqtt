@@ -214,6 +214,10 @@ impl MqttConnection {
         Ok(())
     }
 
+    pub fn sendall<I: Iterator<Item = MqttMsg>>(&mut self, mut msgs: I) -> Result<()> {
+        msgs.try_for_each(|msg| self.send(msg))
+    }
+
     pub fn subscribe(&mut self, topic: &str) -> Result<()> {
         self.client
             .subscribe(topic, QoS::AtMostOnce)

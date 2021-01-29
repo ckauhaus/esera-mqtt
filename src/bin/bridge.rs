@@ -7,12 +7,20 @@ use rumqttc::{LastWill, MqttOptions, QoS};
 use std::fmt;
 use std::net::ToSocketAddrs;
 use std::thread;
-use std::time::Duration;
 use structopt::StructOpt;
+use thiserror::Error;
 
 use esera_mqtt::{
-    ControllerConnection, ControllerError, Error, MqttConnection, MqttMsg, Response, Universe,
+    Bus, ControllerConnection, ControllerError, Device, MqttConnection, MqttMsg, Routes, OW,
 };
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Controller channel {0} closed")]
+    ChanClosed(usize),
+    #[error("MQTT broker connection closed")]
+    MqttClosed,
+}
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -35,37 +43,37 @@ struct Opt {
 
 type ChannelPair<O, I> = (Sender<O>, Receiver<I>);
 
-fn ctrl_loop<A>(addr: A) -> Result<ChannelPair<String, Result<Response, ControllerError>>>
+fn ctrl_loop<A>(addr: A) -> Result<ChannelPair<String, Result<OW, ControllerError>>>
 where
     A: ToSocketAddrs + Clone + fmt::Debug + Send + 'static,
 {
     let (up_tx, up_rx) = channel::unbounded();
     let (down_tx, down_rx) = channel::unbounded();
     let mut c = ControllerConnection::new(addr.clone())?;
-    down_tx.send(c.csi().map(Response::CSI)).ok();
     // this is going to trigger registration which will be handled via ordinary event processing
-    down_tx.send(c.list().map(Response::List3)).ok();
-    thread::spawn(move || loop {
-        match c.event_loop(up_rx.clone(), down_tx.clone()) {
-            Ok(_) => return,
-            Err(e) => error!("[{}] Controller event loop died: {}", c.contno, e),
-        }
-        warn!("Reconnecting to {:?}", &addr);
-        while let Err(e) = c.reconnect(addr.clone()) {
-            error!("[{}] Reconnect failed: {}", c.contno, e);
-            info!("Retrying in 5s...");
-            thread::sleep(Duration::new(5, 0));
-        }
-        down_tx.send(c.csi().map(Response::CSI)).ok();
-        down_tx.send(c.list().map(Response::List3)).ok();
-    });
+    down_tx.send(c.csi()).ok();
+    down_tx.send(c.list()).ok();
+    thread::spawn(
+        move || {
+            if let Err(e) = c.event_loop(up_rx, down_tx) {
+                error!("[{}] Controller event loop died: {}", c.contno, e)
+            }
+        }, // XXX return from this function and restart at outer level
+           // while let Err(e) = c.reconnect(addr.clone()) {
+           //     error!("[{}] Reconnect failed: {}", c.contno, e);
+           //     info!("Retrying in 5s...");
+           //     thread::sleep(Duration::new(5, 0));
+           // }
+           // down_tx.send(c.csi().map(OW::CSI)).ok();
+           // down_tx.send(c.list().map(OW::List3)).ok();
+    );
     Ok((up_tx, down_rx))
 }
 
 pub fn ctrl_create(
     addrs: &[String],
     default_port: u16,
-) -> Result<Vec<ChannelPair<String, Result<Response, ControllerError>>>> {
+) -> Result<Vec<ChannelPair<String, Result<OW, ControllerError>>>> {
     addrs
         .iter()
         .map(|c| {
@@ -78,18 +86,8 @@ pub fn ctrl_create(
         .collect()
 }
 
-fn run(opt: Opt) -> Result<()> {
-    let mut universe = Universe::default();
-    let (ctrl_senders, ctrl_receivers): (Vec<_>, Vec<_>) =
-        ctrl_create(&opt.controllers, opt.default_port)
-            .context("Controller initialization failed")?
-            .into_iter()
-            .unzip();
-    let mut sel = channel::Select::new();
-    for down in &ctrl_receivers {
-        sel.recv(&down);
-    }
-
+// XXX move into mqtt.rs?
+fn setup_mqtt(opt: &Opt) -> Result<(MqttConnection, Receiver<MqttMsg>)> {
     let client = format!("esera_mqtt.{}", std::process::id());
     let mut mqtt_opt = MqttOptions::new(&client, opt.mqtt_host.clone(), 1883);
     mqtt_opt.set_last_will(LastWill {
@@ -107,35 +105,79 @@ fn run(opt: Opt) -> Result<()> {
     info!("Connecting to MQTT broker at {}", opt.mqtt_host);
     let (mut mqtt, mqtt_chan) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
     mqtt.send(MqttMsg::retain("ESERA/status", "online"))?;
-    let mqtt_idx = sel.recv(&mqtt_chan);
+    Ok((mqtt, mqtt_chan))
+}
 
-    debug!("Entering main event loop");
+// XXX overlong parameter list
+fn handle(
+    senders: &[Sender<String>],
+    receivers: &[Receiver<Result<OW, ControllerError>>],
+    mqtt_chan: &Receiver<MqttMsg>,
+    mqtt: &mut MqttConnection,
+    bus: &mut [Bus],
+    routes: &mut Routes<(u8, usize)>,
+) -> Result<()> {
+    let mut sel = channel::Select::new();
+    for r in receivers {
+        sel.recv(r);
+    }
+    let mqtt_idx = sel.recv(mqtt_chan);
     loop {
         let op = sel.select();
         match op.index() {
-            i if i < ctrl_receivers.len() => {
-                match op.recv(&ctrl_receivers[i]) {
-                    Ok(Ok(resp)) => {
-                        universe
-                            .handle_1wire(resp, i)?
-                            .send(&mut mqtt, &ctrl_senders[i])?;
+            i if i < receivers.len() => {
+                match op.recv(&receivers[i]).map_err(|_| Error::ChanClosed(i))? {
+                    Ok(resp) => {
+                        bus[i].handle_1wire(resp, routes)?.send(mqtt, &senders[i])?;
                     }
-                    Ok(Err(e)) => error!("{}", e),
-                    Err(_) => break, // channel closed
+                    Err(e) => error!("{}", e),
                 };
             }
-            i if i == mqtt_idx => match op.recv(&mqtt_chan) {
-                Ok(msg) => match universe.handle_mqtt(msg) {
-                    Ok((res, i)) => res.send(&mut mqtt, &ctrl_senders[i])?,
-                    Err(e @ Error::NoHandler(_)) => debug!("{}", e),
-                    Err(e) => error!("{}", e),
-                },
-                Err(_) => break, // channel closed
-            },
+            i if i == mqtt_idx => {
+                let msg = op.recv(&mqtt_chan).map_err(|_| Error::MqttClosed)?;
+                if let MqttMsg::Pub { ref topic, .. } = msg {
+                    for ((contno, dev), tok) in routes.lookup(topic) {
+                        if let Some(i) = bus.iter().position(|b| b.contno == *contno) {
+                            let res = bus[i].devices[*dev].handle_mqtt(&msg, *tok)?;
+                            res.send(mqtt, &senders[i])?
+                        } else {
+                            warn!("No communication channel found for contno {}", contno);
+                        }
+                    }
+                }
+            }
             _ => panic!("BUG: unknown select() channel indexed"),
         }
     }
-    Ok(())
+}
+
+fn run(opt: Opt) -> Result<()> {
+    let (ctrl_senders, ctrl_receivers): (Vec<_>, Vec<_>) =
+        ctrl_create(&opt.controllers, opt.default_port)
+            .context("Controller initialization failed")?
+            .into_iter()
+            .unzip();
+
+    let (mut mqtt, mqtt_chan) = setup_mqtt(&opt)?;
+    let mut bus = vec![Bus::default(); opt.controllers.len()];
+    let mut routes = Routes::new();
+
+    debug!("Entering main event loop");
+    loop {
+        match handle(
+            &ctrl_senders,
+            &ctrl_receivers,
+            &mqtt_chan,
+            &mut mqtt,
+            &mut bus,
+            &mut routes,
+        ) {
+            Ok(_) => continue,
+            // Err(Error::ChanClosed(i)) => reconnect(i), // XXX
+            // Err(Error::MqttClosed) => reregister(),    // XXX
+            Err(e) => error!("{}", e),
+        }
+    }
 }
 
 fn main() {
