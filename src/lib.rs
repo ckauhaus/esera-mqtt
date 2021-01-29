@@ -107,6 +107,9 @@ impl DeviceInfo {
     }
 }
 
+// XXX rename into Response or something similar
+// XXX better use two Option<Vec<_>> ?
+
 /// Result datatype which may contain both mqtt messages and controller commands.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TwoWay {

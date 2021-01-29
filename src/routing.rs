@@ -24,12 +24,12 @@ impl<I: Debug> Routes<I> {
 impl<I: Eq + Hash + Debug> Routes<I> {
     /// Adds subscription topic to the registry. If a specific topic has been mentioned for the
     /// first time, a MQTT subscribe message is emitted.
-    pub fn register(&mut self, topic: String, id: Id<I>) -> Option<MqttMsg> {
+    pub fn register(&mut self, topic: String, idx: I, token: Token) -> Option<MqttMsg> {
         if let Some(e) = self.by_topic.get_mut(&topic) {
-            e.push(id);
+            e.push((idx, token));
             None
         } else {
-            self.by_topic.insert(topic.clone(), vec![id]);
+            self.by_topic.insert(topic.clone(), vec![(idx, token)]);
             Some(MqttMsg::Sub { topic })
         }
     }

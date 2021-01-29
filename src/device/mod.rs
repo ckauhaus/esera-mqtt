@@ -65,10 +65,7 @@ pub trait Device {
     /// Helper to create (largely constant) device data in announcements. Override for controllers.
     fn announce_device(&self) -> AnnounceDevice {
         let info = self.info();
-        let mut identifiers = vec![
-            info.serno.clone(),
-            format!("{}/{}", info.contno, info.busid),
-        ];
+        let mut identifiers = vec![info.serno.clone()];
         if let Some(name) = &info.name {
             identifiers.push(format!("{}/{}", info.contno, name))
         }

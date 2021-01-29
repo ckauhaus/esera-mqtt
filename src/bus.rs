@@ -52,7 +52,7 @@ impl Bus {
         {
             dev.register_mqtt()
                 .into_iter()
-                .filter_map(|(topic, tok)| routes.register(topic, ((self.contno, i), tok)))
+                .filter_map(|(topic, tok)| routes.register(topic, (self.contno, i), tok))
                 .for_each(|msg| res += TwoWay::from_mqtt(msg));
         }
         debug!("MQTT registry: {:?}", routes);

@@ -86,6 +86,7 @@ fn run(opt: Opt) -> Result<()> {
     let configs = Configs::read(&opt.config)
         .with_context(|| format!("Failed to read config file {}", opt.config))?;
     let client_id = format!("esera_mqtt.{}", process::id());
+    // XXX extract mqtt_setup?
     let mut mqtt_opt = MqttOptions::new(&client_id, opt.mqtt_host.clone(), 1883);
     let mut parts = opt.mqtt_cred.splitn(2, ':');
     match (parts.next(), parts.next()) {
@@ -107,7 +108,7 @@ fn run(opt: Opt) -> Result<()> {
     mqtt.sendall(
         hvacs
             .subscribe_topics()
-            .flat_map(|(idx, token, topic)| routes.register(topic, (idx, token))),
+            .flat_map(|(idx, token, topic)| routes.register(topic, idx, token)),
     )?;
     // publish autoconfig entries
     mqtt.sendall(hvacs.announce())?;
