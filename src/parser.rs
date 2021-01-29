@@ -288,17 +288,8 @@ pub fn lst3(i: &str) -> PResult<OW> {
                 opt(preceded(cc('|'), not_line_ending)),
                 line_ending,
             )),
-            |(busid, serno, status, artno, name, _nl)| -> Result<_> {
-                Ok(DeviceInfo {
-                    busid: String::from(busid),
-                    serno: String::from(serno),
-                    status: status.parse()?,
-                    artno: String::from(artno),
-                    name: name
-                        .filter(|s| !s.trim().is_empty())
-                        .map(|n| String::from(n.trim())),
-                    contno,
-                })
+            |(busid, serno, status, artno, name, _nl)| {
+                DeviceInfo::new(contno, busid, serno, status, artno, name)
             },
         ),
     )(i)?;
@@ -408,7 +399,6 @@ pub fn parse(i: &str) -> PResult<OW> {
 
 #[cfg(test)]
 mod test {
-    use super::Status::*;
     use super::*;
     use assert_matches::assert_matches;
     use pretty_assertions::assert_eq;
@@ -469,43 +459,23 @@ LST|1_OWD1|EF000019096A4026|S_0|11150\n";
         let input = "\
 1_LST3|00:02:54\n\
 LST|1_OWD1|EF000019096A4026|S_0|11150\n\
-LST|1_OWD2|4300001982956429|S_0|DS2408|K8\n\
+LST|1_OWD2|4300001982956429|S_0|DS2408|K \n\
 LST|1_OWD4|FFFFFFFFFFFFFFFF|S_10|none|             \n\
 1_EVT|0:02:55\n";
         let res = lst3(input);
         dbg!(&res);
         let (rem, mtch) = res.unwrap();
         assert_eq!(rem, "1_EVT|0:02:55\n");
+        let items = vec![
+            DeviceInfo::new(1, "OWD1", "EF000019096A4026", "online", "11150", None).unwrap(),
+            DeviceInfo::new(1, "OWD2", "4300001982956429", "online", "DS2408", Some("K")).unwrap(),
+            DeviceInfo::new(1, "OWD4", "FFFFFFFFFFFFFFFF", "unconfigured", "none", None).unwrap(),
+        ];
         assert_eq!(
             mtch,
             OW {
                 contno: 1,
-                msg: Msg::List3(vec![
-                    DeviceInfo {
-                        contno: 1,
-                        busid: "OWD1".into(),
-                        serno: "EF000019096A4026".into(),
-                        status: Online,
-                        artno: "11150".into(),
-                        name: None
-                    },
-                    DeviceInfo {
-                        contno: 1,
-                        busid: "OWD2".into(),
-                        serno: "4300001982956429".into(),
-                        status: Online,
-                        artno: "DS2408".into(),
-                        name: Some("K8".into())
-                    },
-                    DeviceInfo {
-                        contno: 1,
-                        busid: "OWD4".into(),
-                        serno: "FFFFFFFFFFFFFFFF".into(),
-                        status: Unconfigured,
-                        artno: "none".into(),
-                        name: None
-                    },
-                ])
+                msg: Msg::List3(items)
             }
         );
     }

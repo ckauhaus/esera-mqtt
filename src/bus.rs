@@ -18,34 +18,6 @@ pub enum Error {
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-// impl Universe {
-//     /// Processes MQTT message, returns MQTT/1Wire results as well as the controller index to pass
-//     /// the latter to.
-//     pub fn handle_mqtt(&mut self, msg: MqttMsg) -> Result<(TwoWay, usize), crate::Error> {
-//         match msg {
-//             MqttMsg::Pub { ref topic, .. } => {
-//                 if let Some(routes) = self.topics.get(topic) {
-//                     info!("MQTT event: {}", msg);
-//                     routes.iter().map(|((contno, dev), tok)| {
-//                         let bus = &self.bus[contno as usize];
-//                         let i = bus.connection_idx;//XXX
-//                         bus.devices[dev]
-//                             .handle_mqtt(msg, tok)
-//                             .map(|res| Ok((res, i)))
-//                     })
-//                     .collect::<Result<Vec<(TwoWay,usize)
-//                 } else {
-//                     Err(crate::Error::NoHandler(msg))
-//                 }
-//             }
-//             // Controller index doesn't really matter since the results don't
-//             // contain 1-Wire messages.
-//             MqttMsg::Reconnected => Ok((self.register_all_mqtt(), 0)),
-//             _ => Err(crate::Error::NoHandler(msg)),
-//         }
-//     }
-// }
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Bus {
     pub contno: u8,
@@ -60,7 +32,31 @@ impl Bus {
             self.busaddrs
                 .extend(dev.register_1wire().into_iter().map(|a| (a, i)))
         }
-        debug!("[{}] 1Wire Registry: {:?}", self.contno, self.busaddrs);
+        debug!("[{}] 1-Wire Registry: {:?}", self.contno, self.busaddrs);
+    }
+
+    // XXX needs unit test (got several defects)
+    // beware: slots may be unoccupied but devidx routing keys must be correct
+    fn register_mqtt(&self, routes: &mut Routes<(u8, usize)>) -> TwoWay {
+        let mut res = TwoWay::default();
+        // clear all elements that belong to this bus
+        routes.retain(|_topic, addrs| {
+            addrs.retain(|((c, _i), _t)| *c != self.contno);
+            true
+        });
+        for (i, dev) in self
+            .devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.configured())
+        {
+            dev.register_mqtt()
+                .into_iter()
+                .filter_map(|(topic, tok)| routes.register(topic, ((self.contno, i), tok)))
+                .for_each(|msg| res += TwoWay::from_mqtt(msg));
+        }
+        debug!("MQTT registry: {:?}", routes);
+        res
     }
 
     /// Performs device-specific initialization commands for all configured devices.
@@ -72,7 +68,7 @@ impl Bus {
             .collect()
     }
 
-    fn populate(&mut self, lst: parser::List3, routes: &mut Routes<(u8, usize)>) -> TwoWay {
+    fn populate(&mut self, lst: parser::List3) -> TwoWay {
         let mut res = TwoWay::default();
         debug!("[{}] Loading device list", self.contno);
         for (i, dev) in lst.into_iter().enumerate().take(30) {
@@ -84,10 +80,6 @@ impl Bus {
             }
             if slot.configured() {
                 res += TwoWay::mqtt(slot.set_status(status));
-                slot.register_mqtt()
-                    .into_iter()
-                    .filter_map(|(topic, tok)| routes.register(topic, ((self.contno, i), tok)))
-                    .for_each(|msg| res += TwoWay::from_mqtt(msg));
             }
         }
         info!("{}", self);
@@ -141,20 +133,21 @@ impl Bus {
         match resp.msg {
             Msg::CSI(csi) => return self.set_controller(contno, csi),
             Msg::List3(l) => {
-                let res = self.populate(l, routes);
+                let mut res = self.populate(l);
+                res += self.register_mqtt(routes);
                 let init_cmds = self.init();
                 let discovery_ann = self.announce();
                 return Ok(res + TwoWay::new(discovery_ann, init_cmds));
             }
             Msg::DIO(_) => return Ok(self.devices[0].handle_1wire(resp)?),
             Msg::Devstatus(ref s) => {
-                debug!("[{}] {:?}", contno, resp);
+                debug!("[{}] {:?}", contno, resp.msg);
                 if let Some(i) = self.index(&s.addr) {
                     return Ok(self.devices[i].handle_1wire(resp)?);
                 }
             }
             Msg::OWDStatus(ref s) => {
-                debug!("[{}] {:?}", contno, resp);
+                debug!("[{}] {:?}", contno, resp.msg);
                 return Ok(self.devices[s.owd as usize].handle_1wire(resp)?);
             }
             Msg::Keepalive(_) => (),

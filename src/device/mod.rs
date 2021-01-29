@@ -202,7 +202,7 @@ mod switch8;
 use airquality::{AirQuality, TempHum};
 use binary_sensor::BinarySensor;
 use controller2::Controller2;
-use switch8::{Switch8, Switch8Out};
+use switch8::Switch8;
 
 #[enum_dispatch(Device)]
 #[derive(Clone, Debug, PartialEq)]
@@ -210,7 +210,6 @@ pub enum Model {
     TempHum(TempHum),
     AirQuality(AirQuality),
     BinarySensor(BinarySensor),
-    Switch8Out(Switch8Out),
     Switch8(Switch8),
     Controller2(Controller2),
     Unknown(Unknown),
@@ -223,9 +222,7 @@ impl Model {
             "11150" => Self::TempHum(TempHum::new(info)),
             "11151" => Self::AirQuality(AirQuality::new(info)),
             "11216" => Self::BinarySensor(BinarySensor::new(info)),
-            "11220" => Self::Switch8(Switch8::new(info)),
-            "11228" => Self::Switch8(Switch8::new(info)),
-            "11229" => Self::Switch8Out(Switch8Out::new(info)),
+            "11220" | "11228" | "11229" => Self::Switch8(Switch8::new(info)),
             "11340" => Self::Controller2(Controller2::new(info)),
             _ => Self::Unknown(Unknown::new(info)),
         }

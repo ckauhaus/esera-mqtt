@@ -43,7 +43,6 @@ fn mkann(
 ) -> MqttMsg {
     let info = this.info();
     let name = format!("{} {}", this.name(), name);
-    info!("Announcing entity {}", name);
     MqttMsg::retain(
         format!(
             "homeassistant/sensor/{}/{}_{}/config",
@@ -119,5 +118,29 @@ impl Device for TempHum {
             mkann(self, "Humidity", "hum", "humidity", "%", &dev),
             mkann(self, "Dewpoint", "dew", "temperature", "°C", &dev),
         ]
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test::cmp_ow;
+
+    #[test]
+    fn airquality_devstatus() {
+        let mut uut = AirQuality::new(DeviceInfo::new(1, "OWD3", "", "online", "", None).unwrap());
+        cmp_ow(&mut uut, "1_OWD3_1|1976\n", "ESERA/1/OWD3/temp", "19.76");
+        cmp_ow(&mut uut, "1_OWD3_3|5456\n", "ESERA/1/OWD3/hum", "54.56");
+        cmp_ow(&mut uut, "1_OWD3_4|0\n", "ESERA/1/OWD3/dew", "0");
+        cmp_ow(&mut uut, "1_OWD3_5|186518\n", "ESERA/1/OWD3/co2", "1865.18");
+    }
+
+    #[test]
+    fn temphum_devstatus() {
+        let mut uut = TempHum::new(DeviceInfo::new(1, "OWD2", "", "online", "", None).unwrap());
+        cmp_ow(&mut uut, "1_OWD2_1|2087\n", "ESERA/1/OWD2/temp", "20.87");
+        cmp_ow(&mut uut, "1_OWD2_1|-97\n", "ESERA/1/OWD2/temp", "-0.97");
+        cmp_ow(&mut uut, "1_OWD2_3|5980\n", "ESERA/1/OWD2/hum", "59.8");
+        cmp_ow(&mut uut, "1_OWD2_4|332\n", "ESERA/1/OWD2/dew", "3.32");
     }
 }

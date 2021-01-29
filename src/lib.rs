@@ -48,6 +48,31 @@ pub struct DeviceInfo {
 }
 
 impl DeviceInfo {
+    fn new(
+        contno: u8,
+        busid: &str,
+        serno: &str,
+        status: &str,
+        artno: &str,
+        name: Option<&str>,
+    ) -> Result<Self, strum::ParseError> {
+        Ok(Self {
+            contno,
+            busid: String::from(busid),
+            serno: String::from(serno),
+            status: status.parse()?,
+            artno: String::from(artno),
+            name: name.and_then(|s| {
+                let n = s.trim();
+                if !n.is_empty() {
+                    Some(String::from(n))
+                } else {
+                    None
+                }
+            }),
+        })
+    }
+
     /// Format MQTT message topic relating to this device
     fn fmt(&self, args: fmt::Arguments) -> String {
         format!(
@@ -60,7 +85,7 @@ impl DeviceInfo {
 
     /// Format MQTT message topic relating to this device
     pub fn topic<S: AsRef<str>>(&self, item: S) -> String {
-        self.fmt(format_args!("/{}", item.as_ref()))
+        self.fmt(format_args!("{}", item.as_ref()))
     }
 
     pub fn mqtt_msg<S: AsRef<str>, P: ToString>(&self, topic: S, value: P) -> MqttMsg {
@@ -169,6 +194,18 @@ impl From<Vec<MqttMsg>> for TwoWay {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// Helper to check 1-Wire responses with expected MQTT message
+    pub fn cmp_ow(uut: &mut dyn Device, input: &str, top: &str, pl: &str) {
+        let input = parser::parse(input).unwrap().1;
+        match uut.handle_1wire(input).unwrap().mqtt.as_slice() {
+            [MqttMsg::Pub { topic, payload, .. }] => {
+                assert_eq!(topic, top);
+                assert_eq!(payload, pl);
+            }
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
 
     #[test]
     fn add_twoway() {

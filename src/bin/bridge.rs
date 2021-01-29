@@ -138,8 +138,9 @@ fn handle(
                 if let MqttMsg::Pub { ref topic, .. } = msg {
                     for ((contno, dev), tok) in routes.lookup(topic) {
                         if let Some(i) = bus.iter().position(|b| b.contno == *contno) {
-                            let res = bus[i].devices[*dev].handle_mqtt(&msg, *tok)?;
-                            res.send(mqtt, &senders[i])?
+                            bus[i].devices[*dev]
+                                .handle_mqtt(&msg, *tok)?
+                                .send(mqtt, &senders[i])?
                         } else {
                             warn!("No communication channel found for contno {}", contno);
                         }

@@ -95,6 +95,7 @@ impl Device for Switch8 {
 
     fn handle_mqtt(&self, msg: &MqttMsg, token: Token) -> Result<TwoWay> {
         let pl = msg.payload();
+        debug!("[{}] Switch8: handle {}", self.info.contno, pl);
         Ok(match token {
             i @ 0..=7 => TwoWay::from_1wire(format!(
                 "SET,OWD,OUT,{},{},{}",
@@ -102,71 +103,10 @@ impl Device for Switch8 {
                 i,
                 str2bool(pl) as u8
             )),
-            _ => TwoWay::default(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Switch8Out {
-    info: DeviceInfo,
-}
-
-impl Switch8Out {
-    new!(Switch8Out);
-}
-
-impl Device for Switch8Out {
-    std_methods!(Switch8Out);
-
-    fn register_1wire(&self) -> Vec<String> {
-        self.info.mkbusaddrs(&[3])
-    }
-
-    fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
-        Ok(match resp.msg {
-            Msg::Devstatus(s) => {
-                debug!("[{}] Switch8Out {} is {:b}", resp.contno, s.addr, s.val);
-                match s.addr.rsplit('_').next().unwrap() {
-                    "3" => digital_io(&self.info, 8, "out", s.val),
-                    other => panic!("BUG: Unknown busaddr {}", other),
-                }
-            }
             _ => {
-                warn!(
-                    "[{}] Switch8Out: no handler for {:?}",
-                    self.info.contno, resp
-                );
+                warn!("[{}] Switch8: invalid token {}", self.info.contno, token);
                 TwoWay::default()
             }
-        })
-    }
-
-    fn announce(&self) -> Vec<MqttMsg> {
-        let dev = self.announce_device();
-        (1..=8)
-            .map(|ch| ann_out_ch(&dev, self.name(), &self.info, ch))
-            .collect()
-    }
-
-    fn register_mqtt(&self) -> Vec<(String, Token)> {
-        let mut t = Vec::with_capacity(8);
-        for i in 1..=8 {
-            t.push((self.info.fmt(format_args!("set/ch{}", i)), i - 1));
-        }
-        t
-    }
-
-    fn handle_mqtt(&self, msg: &MqttMsg, token: Token) -> Result<TwoWay> {
-        let pl = msg.payload();
-        Ok(match token {
-            i @ 0..=7 => TwoWay::from_1wire(format!(
-                "SET,OWD,OUT,{},{},{}",
-                self.info.devno(),
-                i,
-                str2bool(pl) as u8
-            )),
-            _ => TwoWay::default(),
         })
     }
 }
