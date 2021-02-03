@@ -1,0 +1,66 @@
+[E01]
+heat_state = "ESERA/1/K2/out/ch8"
+heat_cmnd = "ESERA/1/K2/set/ch8"
+temp = "ESERA/2/T_E01/temp"
+
+[E02]
+heat_state = "ESERA/1/K2/out/ch7"
+heat_cmnd = "ESERA/1/K2/set/ch7"
+temp = "shellies/shellyht-F44894/sensor/temperature"
+
+[E03]
+heat_state = "ESERA/1/K3/out/ch1"
+heat_cmnd = "ESERA/1/K3/set/ch1"
+temp = "ESERA/2/T_E03/temp"
+
+[E04]
+heat_state = "ESERA/1/K3/out/ch2"
+heat_cmnd = "ESERA/1/K3/set/ch2"
+temp = "ESERA/2/T_E04/temp"
+offset = -1.2
+
+[E05]
+heat_state = "ESERA/1/K3/out/ch3"
+heat_cmnd = "ESERA/1/K3/set/ch3"
+temp = "ESP/T_E05/sensor/t_e05_temp/state"
+offset = -2.2
+
+[O01]
+heat_state = "ESERA/2/K2/out/ch4"
+heat_cmnd = "ESERA/2/K2/set/ch4"
+temp = "ESERA/2/T_O01/temp"
+offset = -0.9
+
+[O02]
+heat_state = "ESERA/2/K2/out/ch5"
+heat_cmnd = "ESERA/2/K2/set/ch5"
+aux_state = "ESERA/2/K2/out/ch6"
+aux_cmnd = "ESERA/2/K2/set/ch6"
+temp = "ESERA/2/T_O02/temp"
+offset = 0.2
+
+[O05]
+heat_state = "ESERA/2/K2/out/ch7"
+heat_cmnd = "ESERA/2/K2/set/ch7"
+temp = "ESERA/2/T_O05/temp"
+
+[O06]
+heat_state = "ESERA/2/K2/out/ch8"
+heat_cmnd = "ESERA/2/K2/set/ch8"
+temp = "ESERA/2/T_O06/temp"
+
+[D01]
+heat_state = "ESERA/3/SYS/out/ch1"
+heat_cmnd = "ESERA/3/SYS/set/ch1"
+temp = "ESERA/3/T_D01/temp"
+
+[D02]
+heat_state = "ESERA/3/SYS/out/ch2"
+heat_cmnd = "ESERA/3/SYS/set/ch2"
+temp = "ESERA/3/T_D02/temp"
+
+[D03]
+heat_state = "ESERA/3/SYS/out/ch3"
+heat_cmnd = "ESERA/3/SYS/set/ch3"
+temp = "ESERA/3/T_D03_0/temp"
+offset = -0.4

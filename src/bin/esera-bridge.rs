@@ -34,7 +34,7 @@ struct Opt {
     #[structopt(short = "p", long, default_value = "5000")]
     default_port: u16,
     /// MQTT broker address
-    #[structopt(short = "H", long, default_value = "localhost")]
+    #[structopt(short = "H", long, default_value = "localhost", env = "MQTT_HOST")]
     mqtt_host: String,
     /// MQTT credentials (username:password)
     #[structopt(short = "C", long, default_value = "", env = "MQTT_CRED")]

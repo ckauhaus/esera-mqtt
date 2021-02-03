@@ -3,3 +3,4 @@
 .env
 .*.sw?
 tags
+ansible/.vault_password

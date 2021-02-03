@@ -16,7 +16,7 @@ use esera_mqtt::{MqttConnection, MqttMsg, Routes, Token};
 #[derive(StructOpt, Debug)]
 struct Opt {
     /// MQTT broker address
-    #[structopt(short = "H", long, default_value = "localhost")]
+    #[structopt(short = "H", long, default_value = "localhost", env = "MQTT_HOST")]
     mqtt_host: String,
     /// MQTT credentials (username:password)
     #[structopt(short = "C", long, default_value = "", env = "MQTT_CRED")]

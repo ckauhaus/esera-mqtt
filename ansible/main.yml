@@ -1,0 +1,53 @@
+---
+- name: Build
+  hosts: localhost
+  tasks:
+    - name: Cargo
+      ansible.builtin.command:
+        argv: ["cargo", "make"]
+        chdir: ..
+- name: Install
+  hosts: omv.j.kauhaus.de
+  become: yes
+  vars:
+    items:
+      - name: esera-bridge
+        description: MQTT/ESERA bridge
+        args: 192.168.208.11 192.168.208.12 # 192.168.208.13
+      - name: climate
+        description: MQTT virtual climate controller
+        args: /usr/local/etc/mqtt-climate.toml
+    mqtt_pass: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          31646564366438663034636266313966623335646236363230633661393366623631663839636636
+          3531393366626234303565363532643535333631336633650a376264653664303738373333666636
+          66353061366234383034643934633034626331393139353135313438356666346238313037373663
+          6462323632636164330a323830643636643365656634663038653461376536666231366332343966
+          3934
+  tasks:
+    - name: executables
+      ansible.builtin.copy:
+        src: ../target/release/{{ item.name }}
+        dest: /usr/local/bin/mqtt-{{ item.name }}
+        mode: '0755'
+      loop: "{{ items }}"
+    - name: mqtt.env config
+      ansible.builtin.template:
+        src: mqtt.env
+        dest: /usr/local/etc/mqtt.env
+    - name: mqtt-climate.toml config
+      ansible.builtin.template:
+        src: climate.toml
+        dest: /usr/local/etc/mqtt-climate.toml
+    - name: systemd unit files
+      ansible.builtin.template:
+        src: systemd.service
+        dest: /etc/systemd/system/mqtt-{{ item.name }}.service
+      loop: "{{ items }}"
+    - name: systemd services
+      ansible.builtin.systemd:
+        enabled: yes
+        name: mqtt-{{ item.name }}
+        state: restarted
+        daemon_reload: true
+      loop: "{{ items }}"

@@ -5,7 +5,7 @@ name = "esera-mqtt"
 version = "0.4.3"
 
 [[bin]]
-name = "bridge"
+name = "esera-bridge"
 
 [[bin]]
 name = "climate"
