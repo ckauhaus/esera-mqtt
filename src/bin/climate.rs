@@ -1,9 +1,6 @@
-#[macro_use]
-extern crate log;
-
 use anyhow::{Context, Result};
-use rumqttc::{LastWill, MqttOptions, QoS};
 use serde::Deserialize;
+use slog::{debug, error, info, o, warn, Drain, Logger};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -11,7 +8,7 @@ use std::process;
 use structopt::StructOpt;
 
 use esera_mqtt::climate::{Climate, Conf, BASE};
-use esera_mqtt::{MqttConnection, MqttMsg, Routes, Token};
+use esera_mqtt::{MqttMsg, Routes, Token};
 
 #[derive(StructOpt, Debug)]
 struct Opt {
@@ -41,9 +38,13 @@ struct HVACs {
 }
 
 impl HVACs {
-    fn new(c: Configs) -> Self {
+    fn new(c: Configs, log: &Logger) -> Self {
         Self {
-            ctrl: c.0.into_iter().map(|(n, t)| Climate::new(n, t)).collect(),
+            ctrl: c
+                .0
+                .into_iter()
+                .map(|(n, t)| Climate::new(n, t, log))
+                .collect(),
         }
     }
 
@@ -68,13 +69,14 @@ impl HVACs {
         tok: Token,
         topic: &str,
         payload: &str,
+        log: &Logger,
     ) -> Box<dyn Iterator<Item = MqttMsg>> {
         match self.ctrl[idx].process(tok, topic, payload) {
             Ok(resp) => Box::new(resp.into_iter()),
             Err(e) => {
                 error!(
-                    "Failed to process MQTT message ({} {}): {}",
-                    topic, payload, e
+                    log,
+                    "Failed to process MQTT message ({} {}): {}", topic, payload, e
                 );
                 Box::new(std::iter::empty())
             }
@@ -82,28 +84,17 @@ impl HVACs {
     }
 }
 
-fn run(opt: Opt) -> Result<()> {
+fn run(opt: Opt, log: &Logger) -> Result<()> {
     let configs = Configs::read(&opt.config)
         .with_context(|| format!("Failed to read config file {}", opt.config))?;
-    let client_id = format!("esera_mqtt.{}", process::id());
-    // XXX extract mqtt_setup?
-    let mut mqtt_opt = MqttOptions::new(&client_id, opt.mqtt_host.clone(), 1883);
-    let mut parts = opt.mqtt_cred.splitn(2, ':');
-    match (parts.next(), parts.next()) {
-        (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
-        (Some(user), None) => mqtt_opt.set_credentials(user, ""),
-        _ => &mut mqtt_opt,
-    };
-    mqtt_opt.set_last_will(LastWill {
-        topic: format!("{}/status", BASE),
-        message: "offline".into(),
-        qos: QoS::AtMostOnce,
-        retain: true,
-    });
-    let (mut mqtt, recv) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
-    mqtt.send(MqttMsg::retain(format!("{}/status", BASE), "online"))
-        .context("Cannot set status to online")?;
-    let mut hvacs = HVACs::new(configs);
+    let (mut mqtt, recv) = esera_mqtt::MqttConnection::new(
+        &opt.mqtt_host,
+        &opt.mqtt_cred,
+        &format!("{}/status", BASE),
+        log.new(o!("mqtt" => opt.mqtt_host.clone())),
+    )
+    .context("Failed to connect to MQTT broker")?;
+    let mut hvacs = HVACs::new(configs, log);
     let mut routes = Routes::new();
     mqtt.sendall(
         hvacs
@@ -114,7 +105,7 @@ fn run(opt: Opt) -> Result<()> {
     mqtt.sendall(hvacs.announce())?;
     // set initial state
     mqtt.sendall(hvacs.eval())?;
-    info!("Entering main loop");
+    debug!(log, "Entering main loop");
     for msg in recv {
         match msg {
             MqttMsg::Pub {
@@ -124,7 +115,7 @@ fn run(opt: Opt) -> Result<()> {
             } => {
                 if let Some(xs) = routes.get(topic) {
                     for (idx, tok) in xs {
-                        mqtt.sendall(hvacs.process(*idx, *tok, topic, payload))?;
+                        mqtt.sendall(hvacs.process(*idx, *tok, topic, payload, log))?;
                     }
                 }
             }
@@ -133,18 +124,27 @@ fn run(opt: Opt) -> Result<()> {
                     mqtt.send(msg)?
                 }
             }
-            _ => warn!("Unkown MQTT message type: {:?}", msg),
+            _ => warn!(log, "Unkown MQTT message type: {:?}", msg),
         }
     }
     Ok(())
 }
 
 fn main() {
-    env_logger::init();
+    dotenv::dotenv().ok();
     let opt = Opt::from_args();
-    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
-    if let Err(e) = run(opt) {
-        error!("FATAL: {}", e);
+    #[cfg(not(debug_assertions))]
+    let log = Logger::root(slog_journald::JournaldDrain.ignore_res(), o!());
+    #[cfg(debug_assertions)]
+    let log = {
+        let d = slog_term::TermDecorator::new().build();
+        let d = slog_term::FullFormat::new(d).build().fuse();
+        let d = slog_async::Async::new(d).build().fuse();
+        Logger::root(d, o!())
+    };
+    info!(log, "Connecting to MQTT broker"; "mqtt" => &opt.mqtt_host);
+    if let Err(e) = run(opt, &log) {
+        error!(log, "{}", e);
         process::exit(1)
     }
 }

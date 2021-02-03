@@ -1,6 +1,7 @@
 ///! HVAC climate controller
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use slog::{debug, error, info, o, Logger};
 use strum_macros::EnumString;
 use strum_macros::IntoStaticStr;
 use thiserror::Error;
@@ -18,6 +19,7 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub static BASE: &str = "homeassistant/climate/virt";
+const INITIAL_TEMP: f32 = 21.0;
 const EPSILON_TEMP: f32 = 0.02;
 const AUX_HEAT_TRIGGER: f32 = 0.8; // offset in °C
 
@@ -27,8 +29,6 @@ const TOK_MODE_SET: Token = 3;
 const TOK_TEMP_SET: Token = 4;
 const TOK_DEW: Token = 5;
 const TOK_AUX_STATE: Token = 6;
-
-const INITIAL_TEMP: f32 = 21.0;
 
 lazy_static! {
     static ref DEVICE: AnnounceDevice = AnnounceDevice {
@@ -97,7 +97,7 @@ enum Mode {
     Heat,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Climate {
     name: String,
     base: String,
@@ -107,10 +107,11 @@ pub struct Climate {
     temp_cur: f32,
     heating_on: bool,
     aux_on: bool,
+    log: Logger,
 }
 
 impl Climate {
-    pub fn new<S: AsRef<str>>(name: S, conf: Conf) -> Self {
+    pub fn new<S: AsRef<str>>(name: S, conf: Conf, log: &Logger) -> Self {
         Self {
             name: name.as_ref().into(),
             base: format!("{}/{}", BASE, name.as_ref()),
@@ -120,6 +121,7 @@ impl Climate {
             temp_cur: INITIAL_TEMP,
             heating_on: false,
             aux_on: false,
+            log: log.new(o!("HVAC" => name.as_ref().to_owned())),
         }
     }
 
@@ -155,7 +157,7 @@ impl Climate {
     }
 
     pub fn announce(&self) -> MqttMsg {
-        info!("Announcing HVAC {}", self.name);
+        debug!(self.log, "Announcing");
         MqttMsg::retain(
             self.t("config"),
             serde_json::to_string(&self.discovery()).unwrap(),
@@ -194,7 +196,7 @@ impl Climate {
     fn set_aux(&self, on: bool) -> Vec<MqttMsg> {
         if let Some(aux_cmnd) = &self.conf.aux_cmnd {
             if self.aux_on != on {
-                info!("[{}] Setting auxiliary heating to {}", self.name, on);
+                info!(self.log, "Setting auxiliary heating to {}", on);
                 return vec![MqttMsg::new(aux_cmnd.to_string(), bool2str(on))];
             }
         }
@@ -208,7 +210,10 @@ impl Climate {
                     .parse::<f32>()
                     .map_err(|e| Error::FloatFormat(payload.into(), e))?;
                 if (self.temp_set - new).abs() > EPSILON_TEMP {
-                    info!("[{}] Setting target temperature to {} °C", self.name, new);
+                    info!(
+                        self.log,
+                        "Setting {} target temperature to {} °C", self.name, new
+                    );
                     self.temp_set = new;
                     let mut res = self.eval();
                     res.push(MqttMsg::retain(self.t("target/set"), payload));
@@ -230,7 +235,7 @@ impl Climate {
                     .parse()
                     .map_err(|_| Error::Keyword(payload.into()))?;
                 if self.mode != new {
-                    debug!("[{}] Setting mode {}", self.name, new);
+                    debug!(self.log, "Setting mode {}", new);
                     self.mode = new;
                     let mut res = self.eval();
                     res.push(MqttMsg::retain(self.t("mode/set"), payload));
@@ -240,7 +245,7 @@ impl Climate {
             TOK_HEAT_STATE => {
                 let new = str2bool(payload);
                 if self.heating_on != new {
-                    debug!("[{}] Heating is {}", self.name, new);
+                    debug!(self.log, "Heating is {}", new);
                     self.heating_on = new;
                     return Ok(self.eval());
                 }
@@ -248,7 +253,7 @@ impl Climate {
             TOK_AUX_STATE => {
                 let new = str2bool(payload);
                 if self.aux_on != new {
-                    debug!("[{}] Aux heating is {}", self.name, new);
+                    debug!(self.log, "Aux heating is {}", new);
                     self.aux_on = new;
                 }
             }
@@ -266,7 +271,7 @@ impl Climate {
         ];
         if self.mode == Mode::Off {
             if self.heating_on {
-                info!("[{}] Turning heating off (disabled)", self.name);
+                info!(self.log, "Turning heating off ({} disabled)", self.name);
                 res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(false)));
             }
             res.extend(self.set_aux(false));
@@ -275,8 +280,8 @@ impl Climate {
         match (self.temp_cur < self.temp_set, self.heating_on) {
             (true, false) => {
                 info!(
-                    "[{}] Turning heating on ({:.2} °C)",
-                    self.name, self.temp_cur
+                    self.log,
+                    "Turning heating on ({}={:.2} °C)", self.name, self.temp_cur
                 );
                 res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(true)));
                 // Use auxiliary heating to bridge larger temperature gaps
@@ -286,8 +291,8 @@ impl Climate {
             }
             (false, true) => {
                 info!(
-                    "[{}] Turning heating off ({:.2} °C)",
-                    self.name, self.temp_cur
+                    self.log,
+                    "Turning heating off ({}={:.2} °C)", self.name, self.temp_cur
                 );
                 res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(false)));
                 res.extend(self.set_aux(false));

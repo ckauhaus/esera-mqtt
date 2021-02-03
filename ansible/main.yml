@@ -13,7 +13,7 @@
     items:
       - name: esera-bridge
         description: MQTT/ESERA bridge
-        args: 192.168.208.11 192.168.208.12 # 192.168.208.13
+        args: 192.168.208.11 192.168.208.12 192.168.208.13
       - name: climate
         description: MQTT virtual climate controller
         args: /usr/local/etc/mqtt-climate.toml

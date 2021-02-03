@@ -3,7 +3,6 @@ extern crate log;
 
 use anyhow::{Context, Result};
 use crossbeam::channel::{self, Receiver, Sender};
-use rumqttc::{LastWill, MqttOptions, QoS};
 use std::fmt;
 use std::net::ToSocketAddrs;
 use std::thread;
@@ -86,28 +85,6 @@ pub fn ctrl_create(
         .collect()
 }
 
-// XXX move into mqtt.rs?
-fn setup_mqtt(opt: &Opt) -> Result<(MqttConnection, Receiver<MqttMsg>)> {
-    let client = format!("esera_mqtt.{}", std::process::id());
-    let mut mqtt_opt = MqttOptions::new(&client, opt.mqtt_host.clone(), 1883);
-    mqtt_opt.set_last_will(LastWill {
-        topic: "ESERA/status".into(),
-        message: "offline".into(),
-        qos: QoS::AtMostOnce,
-        retain: true,
-    });
-    let mut parts = opt.mqtt_cred.splitn(2, ':');
-    match (parts.next(), parts.next()) {
-        (Some(user), Some(pw)) => mqtt_opt.set_credentials(user, pw),
-        (Some(user), None) => mqtt_opt.set_credentials(user, ""),
-        _ => &mut mqtt_opt,
-    };
-    info!("Connecting to MQTT broker at {}", opt.mqtt_host);
-    let (mut mqtt, mqtt_chan) = MqttConnection::new(&opt.mqtt_host, mqtt_opt)?;
-    mqtt.send(MqttMsg::retain("ESERA/status", "online"))?;
-    Ok((mqtt, mqtt_chan))
-}
-
 // XXX overlong parameter list
 fn handle(
     senders: &[Sender<String>],
@@ -159,7 +136,8 @@ fn run(opt: Opt) -> Result<()> {
             .into_iter()
             .unzip();
 
-    let (mut mqtt, mqtt_chan) = setup_mqtt(&opt)?;
+    let (mut mqtt, mqtt_chan) =
+        MqttConnection::new(&opt.mqtt_host, &opt.mqtt_cred, "ESERA/status", None)?;
     let mut bus = vec![Bus::default(); opt.controllers.len()];
     let mut routes = Routes::new();
 
