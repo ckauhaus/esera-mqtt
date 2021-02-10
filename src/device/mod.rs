@@ -194,21 +194,24 @@ fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: i32) -> TwoWa
 mod airquality;
 mod binary_sensor;
 mod controller2;
+mod hub;
 mod switch8;
 
 use airquality::{AirQuality, TempHum};
 use binary_sensor::BinarySensor;
 use controller2::Controller2;
+use hub::Hub;
 use switch8::Switch8;
 
 #[enum_dispatch(Device)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Model {
-    TempHum(TempHum),
     AirQuality(AirQuality),
     BinarySensor(BinarySensor),
-    Switch8(Switch8),
     Controller2(Controller2),
+    Hub(Hub),
+    Switch8(Switch8),
+    TempHum(TempHum),
     Unknown(Unknown),
 }
 
@@ -220,6 +223,7 @@ impl Model {
             "11151" => Self::AirQuality(AirQuality::new(info)),
             "11216" => Self::BinarySensor(BinarySensor::new(info)),
             "11220" | "11228" | "11229" => Self::Switch8(Switch8::new(info)),
+            "11322" => Self::Hub(Hub::new(info)),
             "11340" => Self::Controller2(Controller2::new(info)),
             _ => Self::Unknown(Unknown::new(info)),
         }
@@ -244,14 +248,7 @@ impl fmt::Display for Model {
             info.artno,
             info.serno
         )?;
-        write!(
-            f,
-            "{}",
-            match info.name {
-                Some(ref n) => n,
-                None => "-",
-            }
-        )
+        write!(f, "{}", info.name.as_deref().unwrap_or("-"))
     }
 }
 

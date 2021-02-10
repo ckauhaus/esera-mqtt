@@ -148,10 +148,9 @@ impl MqttConnection {
     ) -> Result<(Self, Receiver<MqttMsg>)> {
         let host = host.into();
         // XXX remove StdLog if transition to slog is complete
-        let log = log.into().unwrap_or(Logger::root(
-            slog_stdlog::StdLog.fuse(),
-            o!("host" => host.clone()),
-        ));
+        let log = log.into().unwrap_or_else(|| {
+            Logger::root(slog_stdlog::StdLog.fuse(), o!("host" => host.clone()))
+        });
         let client_id = format!("esera_mqtt.{}", std::process::id());
         let mut opt = MqttOptions::new(&client_id, &host, 1883);
         let mut parts = cred.splitn(2, ':');

@@ -48,7 +48,7 @@ where
 {
     let (up_tx, up_rx) = channel::unbounded();
     let (down_tx, down_rx) = channel::unbounded();
-    let mut c = ControllerConnection::new(addr.clone())?;
+    let mut c = ControllerConnection::new(addr)?;
     // this is going to trigger registration which will be handled via ordinary event processing
     down_tx.send(c.csi()).ok();
     down_tx.send(c.list()).ok();

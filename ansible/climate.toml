@@ -63,4 +63,4 @@ temp = "ESERA/3/T_D02/temp"
 heat_state = "ESERA/3/SYS/out/ch3"
 heat_cmnd = "ESERA/3/SYS/set/ch3"
 temp = "ESERA/3/T_D03_0/temp"
-offset = -0.4
+offset = -0.5
