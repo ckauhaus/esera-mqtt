@@ -1,7 +1,7 @@
 [E01]
 heat_state = "ESERA/1/K2/out/ch8"
 heat_cmnd = "ESERA/1/K2/set/ch8"
-temp = "ESERA/2/T_E01/temp"
+temp = "ESP/T_E01/sensor/t_e01_temp/state"
 
 [E02]
 heat_state = "ESERA/1/K2/out/ch7"

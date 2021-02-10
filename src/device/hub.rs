@@ -51,7 +51,7 @@ impl Device for Hub {
                         "device_class": measure,
                         "device": &dev,
                         "expire_after": 300,
-                        "name": format!("Hub {} {}V", measure, voltage),
+                        "name": format!("Hub.{} {}V {}", self.info.contno, measure, voltage),
                         "state_topic": self.info.topic(&topic),
                         "unique_id": format!("{}_{}", self.info.serno, topic),
                         "unit_of_measurement": if *measure == "current" { "mA" } else { "V" },
