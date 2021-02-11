@@ -11,7 +11,7 @@ temp = "shellies/shellyht-F44894/sensor/temperature"
 [E03]
 heat_state = "ESERA/1/K3/out/ch1"
 heat_cmnd = "ESERA/1/K3/set/ch1"
-temp = "ESERA/2/T_E03/temp"
+temp = "ESP/T_E03/sensor/t_e03_temp/state"
 
 [E04]
 heat_state = "ESERA/1/K3/out/ch2"

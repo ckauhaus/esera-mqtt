@@ -141,6 +141,35 @@ macro_rules! std_methods {
     };
 }
 
+macro_rules! ow_sensor_handlers {
+    ( $( $n:expr => $topic:expr ),* ) => {
+        fn register_1wire(&self) -> Vec<String> {
+            let mut res = Vec::with_capacity(5);
+            $( res.push(format!("{}_{}", self.info.busid, $n)); )*
+            res
+        }
+
+        fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
+            Ok(match resp.msg {
+                Msg::Devstatus(s) => match
+                    s.addr
+                        .rsplit('_')
+                        .nth(0)
+                        .unwrap()
+                        .parse()
+                        .map_err(|e| super::Error::BusId(s.addr.to_owned(), e))? {
+                    $( $n => TwoWay::from_mqtt(self.info.mqtt_msg($topic, centi2float(s.val))), )*
+                    other => panic!("BUG: Unknown busaddr {}", other),
+                },
+                _ => {
+                    warn!("[{}] {}: no handler for {:?}", self.info.contno, self.model(), resp);
+                    TwoWay::default()
+                }
+            })
+        }
+    };
+}
+
 pub fn bool2str<N: Into<u32>>(n: N) -> &'static str {
     if n.into() == 0 {
         "0"

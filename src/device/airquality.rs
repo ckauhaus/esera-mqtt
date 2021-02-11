@@ -3,35 +3,6 @@ use crate::parser::{Msg, OW};
 use crate::{Device, DeviceInfo, MqttMsg, TwoWay};
 use serde_json::json;
 
-macro_rules! handlers {
-    ( $( $n:expr => $topic:expr ),* ) => {
-        fn register_1wire(&self) -> Vec<String> {
-            let mut res = Vec::with_capacity(5);
-            $( res.push(format!("{}_{}", self.info.busid, $n)); )*
-            res
-        }
-
-        fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
-            Ok(match resp.msg {
-                Msg::Devstatus(s) => match
-                    s.addr
-                        .rsplit('_')
-                        .nth(0)
-                        .unwrap()
-                        .parse()
-                        .map_err(|e| super::Error::BusId(s.addr.to_owned(), e))? {
-                    $( $n => TwoWay::from_mqtt(self.info.mqtt_msg($topic, centi2float(s.val))), )*
-                    other => panic!("BUG: Unknown busaddr {}", other),
-                },
-                _ => {
-                    warn!("[{}] {}: no handler for {:?}", self.info.contno, self.model(), resp);
-                    TwoWay::default()
-                }
-            })
-        }
-    };
-}
-
 /// Makes announcement config for air sensors
 fn mkann(
     this: &dyn Device,
@@ -75,8 +46,9 @@ impl AirQuality {
 impl Device for AirQuality {
     std_methods!(AirQuality);
 
-    handlers!(
+    ow_sensor_handlers!(
         1 => "temp",
+        2 => "vdd",
         3 => "hum",
         4 => "dew",
         5 => "co2"
@@ -86,6 +58,7 @@ impl Device for AirQuality {
         let dev = self.announce_device();
         vec![
             mkann(self, "Temperature", "temp", "temperature", "°C", &dev),
+            mkann(self, "Vdd", "vdd", "voltage", "V", &dev),
             mkann(self, "Humidity", "hum", "humidity", "%", &dev),
             mkann(self, "Dewpoint", "dew", "temperature", "°C", &dev),
             mkann(self, "CO2", "co2", "pressure", "ppm", &dev),
@@ -105,8 +78,9 @@ impl TempHum {
 impl Device for TempHum {
     std_methods!(TempHum);
 
-    handlers!(
+    ow_sensor_handlers!(
         1 => "temp",
+        2 => "vdd",
         3 => "hum",
         4 => "dew"
     );
@@ -115,6 +89,7 @@ impl Device for TempHum {
         let dev = self.announce_device();
         vec![
             mkann(self, "Temperature", "temp", "temperature", "°C", &dev),
+            mkann(self, "Vdd", "vdd", "voltage", "V", &dev),
             mkann(self, "Humidity", "hum", "humidity", "%", &dev),
             mkann(self, "Dewpoint", "dew", "temperature", "°C", &dev),
         ]
@@ -130,6 +105,7 @@ mod test {
     fn airquality_devstatus() {
         let mut uut = AirQuality::new(DeviceInfo::new(1, "OWD3", "", "online", "", None).unwrap());
         cmp_ow(&mut uut, "1_OWD3_1|1976\n", "ESERA/1/OWD3/temp", "19.76");
+        cmp_ow(&mut uut, "1_OWD3_2|497\n", "ESERA/1/OWD3/vdd", "4.97");
         cmp_ow(&mut uut, "1_OWD3_3|5456\n", "ESERA/1/OWD3/hum", "54.56");
         cmp_ow(&mut uut, "1_OWD3_4|0\n", "ESERA/1/OWD3/dew", "0");
         cmp_ow(&mut uut, "1_OWD3_5|186518\n", "ESERA/1/OWD3/co2", "1865.18");
@@ -140,6 +116,7 @@ mod test {
         let mut uut = TempHum::new(DeviceInfo::new(1, "OWD2", "", "online", "", None).unwrap());
         cmp_ow(&mut uut, "1_OWD2_1|2087\n", "ESERA/1/OWD2/temp", "20.87");
         cmp_ow(&mut uut, "1_OWD2_1|-97\n", "ESERA/1/OWD2/temp", "-0.97");
+        cmp_ow(&mut uut, "1_OWD2_2|510\n", "ESERA/1/OWD2/vdd", "5.1");
         cmp_ow(&mut uut, "1_OWD2_3|5980\n", "ESERA/1/OWD2/hum", "59.8");
         cmp_ow(&mut uut, "1_OWD2_4|332\n", "ESERA/1/OWD2/dew", "3.32");
     }
