@@ -153,6 +153,7 @@ impl Bus {
             Msg::Keepalive(_) => (),
             Msg::Evt(_) => (),
             Msg::Inf(_) => (),
+            Msg::Err(e) => error!("Controller error {}", e),
             _ => warn!("Unknown controller event {:?}", resp),
         }
         Ok(TwoWay::default())

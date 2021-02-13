@@ -9,6 +9,7 @@ pub struct Controller2 {
     info: DeviceInfo,
     dio: DIO,
     sw_version: String,
+    inputs: i32,
 }
 
 impl Controller2 {
@@ -19,7 +20,7 @@ impl Device for Controller2 {
     std_methods!(Controller2);
 
     fn init(&mut self) -> Vec<String> {
-        vec!["GET,SYS,DIO".into()]
+        vec!["SET,SYS,OUTA,500".into(), "GET,SYS,DIO".into()]
     }
 
     fn register_1wire(&self) -> Vec<String> {
@@ -40,8 +41,13 @@ impl Device for Controller2 {
             Msg::Devstatus(s) => {
                 debug!("[{}] Controller2 {} => {:b}", resp.contno, s.addr, s.val);
                 match s.addr.as_ref() {
-                    "SYS1_1" => digital_io(&self.info, 4, "in", s.val),
-                    "SYS2_1" => digital_io(&self.info, 5, "out", s.val),
+                    "SYS1_1" => {
+                        let res = digital_io(&self.info, 4, "in", s.val, None)
+                            + digital_io(&self.info, 4, "button", s.val, Some(self.inputs));
+                        self.inputs = s.val;
+                        res
+                    }
+                    "SYS2_1" => digital_io(&self.info, 5, "out", s.val, None),
                     "SYS3" => TwoWay::from_mqtt(self.info.mqtt_msg("out/ana", centi2float(s.val))),
                     other => panic!("BUG: Unknown busaddr {}", other),
                 }
@@ -72,10 +78,26 @@ impl Device for Controller2 {
                     "device": &dev,
                     "automation_type": "trigger",
                     "payload": pl,
-                    "topic": self.info.fmt(format_args!("in/ch{}", ch)),
+                    "topic": self.info.fmt(format_args!("button/ch{}", ch)),
                     "type": format!("button_{}_{}", dur, dir),
                     "subtype": format!("button_{}", ch),
                 }))
+                .unwrap(),
+            )
+        };
+        let binary_sensor = |ch| {
+            MqttMsg::new(
+                disc_topic("binary_sensor", &self.info, format_args!("button_{}", ch)),
+                serde_json::to_string(&json!({
+                        "availability_topic": self.info.topic("status"),
+                        "state_topic": self.info.fmt(format_args!("in/ch{}", ch)),
+                        "device": &dev,
+                        "name": format!("Controller.{} in {}", self.info.contno, ch),
+                        "payload_on": "1",
+                        "payload_off": "0",
+                        "unique_id": format!("{}_in{}", self.info.serno, ch),
+                }
+                ))
                 .unwrap(),
             )
         };
@@ -87,6 +109,7 @@ impl Device for Controller2 {
             for (dir, pl) in &[("press", "1"), ("release", "0")] {
                 res.push(trigger(ch, dur, dir, pl));
             }
+            res.push(binary_sensor(ch));
         }
         for ch in 1..=5 {
             res.push(MqttMsg::new(

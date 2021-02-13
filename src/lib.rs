@@ -88,6 +88,11 @@ impl DeviceInfo {
         self.fmt(format_args!("{}", item.as_ref()))
     }
 
+    /// Status topic of the associated controller
+    pub fn ctrl_status(&self) -> String {
+        format!("ESERA/{}/status", self.contno)
+    }
+
     pub fn mqtt_msg<S: AsRef<str>, P: ToString>(&self, topic: S, value: P) -> MqttMsg {
         MqttMsg::new(self.topic(topic), value)
     }
@@ -104,6 +109,11 @@ impl DeviceInfo {
     /// unmodified (e.g., "SYS").
     pub fn devno(&self) -> &str {
         self.busid.strip_prefix("OWD").unwrap_or(&self.busid)
+    }
+
+    /// Human readable name. Falls back to OWD id if none set.
+    pub fn name(&self) -> &str {
+        self.name.as_ref().unwrap_or(&self.busid)
     }
 }
 

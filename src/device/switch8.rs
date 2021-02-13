@@ -26,6 +26,7 @@ fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: usize) ->
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Switch8 {
     info: DeviceInfo,
+    inputs: i32,
 }
 
 impl Switch8 {
@@ -44,8 +45,13 @@ impl Device for Switch8 {
             Msg::Devstatus(s) => {
                 debug!("[{}] Switch8 {} is {:b}", resp.contno, s.addr, s.val);
                 match s.addr.rsplit('_').next().unwrap() {
-                    "1" => digital_io(&self.info, 8, "in", s.val),
-                    "3" => digital_io(&self.info, 8, "out", s.val),
+                    "1" => {
+                        let res = digital_io(&self.info, 8, "in", s.val, None)
+                            + digital_io(&self.info, 8, "button", s.val, Some(self.inputs));
+                        self.inputs = s.val;
+                        res
+                    }
+                    "3" => digital_io(&self.info, 8, "out", s.val, None),
                     other => panic!("BUG: Unknown busaddr {}", other),
                 }
             }

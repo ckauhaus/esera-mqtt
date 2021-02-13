@@ -25,7 +25,7 @@ impl Device for BinarySensor {
             Msg::Devstatus(s) => {
                 debug!("[{}] BinarySensor {} is {:b}", resp.contno, s.addr, s.val);
                 match s.addr.rsplit('_').next().unwrap() {
-                    "1" => digital_io(&self.info, 8, "in", s.val),
+                    "1" => digital_io(&self.info, 8, "in", s.val, None),
                     other => panic!("BUG: Unknown busaddr {}", other),
                 }
             }

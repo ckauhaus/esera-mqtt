@@ -160,7 +160,8 @@ fn run(opt: Opt) -> Result<()> {
 }
 
 fn main() {
-    env_logger::init();
+    dotenv::dotenv().ok();
+    env_logger::builder().format_timestamp(None).init();
     let opt = Opt::from_args();
     if let Err(e) = run(opt) {
         error!("FATAL: {}", e);

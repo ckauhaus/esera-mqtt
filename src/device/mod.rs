@@ -41,7 +41,7 @@ pub trait Device {
 
     /// Human readable name. Falls back to OWD id if none set.
     fn name(&self) -> &str {
-        self.info().name.as_ref().unwrap_or(&self.info().busid)
+        self.info().name()
     }
 
     /// Whether this device is internally configured or not. Should be generally true.
@@ -203,7 +203,13 @@ fn disc_topic(typ: &str, info: &DeviceInfo, sub: fmt::Arguments) -> String {
     )
 }
 
-fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: i32) -> TwoWay {
+fn digital_io(
+    info: &'_ DeviceInfo,
+    n: usize,
+    inout: &'_ str,
+    val: i32,
+    previous: Option<i32>,
+) -> TwoWay {
     assert!(
         val >= 0,
         "DigitalIO value must be positive ({} has {})",
@@ -212,12 +218,76 @@ fn digital_io(info: &'_ DeviceInfo, n: usize, inout: &'_ str, val: i32) -> TwoWa
     );
     let mut res = TwoWay::default();
     for bit in 0..n {
-        res += TwoWay::from_mqtt(MqttMsg::new(
-            info.fmt(format_args!("{}/ch{}", inout, bit + 1)),
-            bool2str(val as u32 & (1 << bit)),
-        ))
+        if let Some(old) = previous {
+            if val & (1 << bit) != old & (1 << bit) {
+                let new = bool2str(val as u32 & (1 << bit));
+                info!(
+                    "[{}] state change name={} busid={} channel={} new={}",
+                    info.contno,
+                    info.name(),
+                    info.busid,
+                    bit + 1,
+                    new
+                );
+                res += TwoWay::from_mqtt(MqttMsg::new(
+                    info.fmt(format_args!("{}/ch{}", inout, bit + 1)),
+                    new,
+                ))
+            }
+        } else {
+            res += TwoWay::from_mqtt(MqttMsg::new(
+                info.fmt(format_args!("{}/ch{}", inout, bit + 1)),
+                bool2str(val as u32 & (1 << bit)),
+            ))
+        }
     }
     res
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn digio_mqtt() {
+        assert_eq!(
+            digital_io(
+                &DeviceInfo::new(1, "SYS", "", "online", "", None).unwrap(),
+                3,
+                "in",
+                0b101,
+                None
+            ),
+            TwoWay::new(
+                vec![
+                    MqttMsg::new("ESERA/1/SYS/in/ch1", "1"),
+                    MqttMsg::new("ESERA/1/SYS/in/ch2", "0"),
+                    MqttMsg::new("ESERA/1/SYS/in/ch3", "1"),
+                ],
+                vec![]
+            )
+        )
+    }
+
+    #[test]
+    fn digio_diff_against_old_state() {
+        assert_eq!(
+            digital_io(
+                &DeviceInfo::new(1, "SYS", "", "online", "", None).unwrap(),
+                3,
+                "but",
+                0b010,
+                Some(0b100)
+            ),
+            TwoWay::new(
+                vec![
+                    MqttMsg::new("ESERA/1/SYS/but/ch2", "1"),
+                    MqttMsg::new("ESERA/1/SYS/but/ch3", "0"),
+                ],
+                vec![]
+            )
+        )
+    }
 }
 
 mod airquality;
