@@ -34,7 +34,7 @@ pub enum MqttMsg {
     Sub {
         topic: String,
     },
-    Reconnected, // XXX TODO handle downstream
+    Reconnected,
 }
 
 impl MqttMsg {
@@ -140,10 +140,10 @@ fn process_packet(pck: Packet, tx: &Sender<MqttMsg>, log: &Logger) -> Result<()>
 }
 
 impl MqttConnection {
-    pub fn new<S: Into<String>, L: Into<Option<Logger>>>(
+    pub fn new<S: Into<String>, T: AsRef<str>, L: Into<Option<Logger>>>(
         host: S,
         cred: &str,
-        status_topic: &str,
+        status_topic: T,
         log: L,
     ) -> Result<(Self, Receiver<MqttMsg>)> {
         let host = host.into();
@@ -160,7 +160,7 @@ impl MqttConnection {
             _ => &mut opt,
         };
         opt.set_last_will(rumqttc::LastWill {
-            topic: status_topic.into(),
+            topic: status_topic.as_ref().to_string(),
             message: "offline".into(),
             qos: QoS::AtMostOnce,
             retain: true,
@@ -187,7 +187,7 @@ impl MqttConnection {
             let (tx, rx) = channel::unbounded();
             let mut this = Self { host, client, log };
             this.recv_loop(conn, tx);
-            this.send(MqttMsg::retain(status_topic, "online"))?;
+            this.send(MqttMsg::retain(status_topic.as_ref(), "online"))?;
             Ok((this, rx))
         } else {
             Err(Error::Disconnected)

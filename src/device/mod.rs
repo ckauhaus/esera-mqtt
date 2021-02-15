@@ -1,5 +1,5 @@
 use crate::parser::OW;
-use crate::{DeviceInfo, MqttMsg, Status, Token, TwoWay};
+use crate::{DeviceInfo, MqttMsg, Token, TwoWay};
 
 use enum_dispatch::enum_dispatch;
 use serde::Serialize;
@@ -81,18 +81,6 @@ pub trait Device {
                 None
             },
         }
-    }
-
-    /// Processes status updates from 1-Wire list results.
-    fn set_status(&mut self, new: Status) -> Vec<MqttMsg> {
-        self.info_mut().status = new;
-        self.get_status()
-    }
-
-    /// Returns MQTT message announcing the device status
-    fn get_status(&self) -> Vec<MqttMsg> {
-        let info = self.info();
-        vec![MqttMsg::retain(info.topic("status"), info.status)]
     }
 
     /// Returns list of 1-Wire busaddrs (e.g., OWD14_1) for which events should be routed to this

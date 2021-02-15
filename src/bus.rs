@@ -37,13 +37,9 @@ impl Bus {
 
     // XXX needs unit test (got several defects)
     // beware: slots may be unoccupied but devidx routing keys must be correct
-    fn register_mqtt(&self, routes: &mut Routes<(u8, usize)>) -> TwoWay {
+    fn register_mqtt(&self, routes: &mut Routes<usize>) -> TwoWay {
         let mut res = TwoWay::default();
-        // clear all elements that belong to this bus
-        routes.retain(|_topic, addrs| {
-            addrs.retain(|((c, _i), _t)| *c != self.contno);
-            true
-        });
+        routes.clear();
         for (i, dev) in self
             .devices
             .iter()
@@ -52,7 +48,7 @@ impl Bus {
         {
             dev.register_mqtt()
                 .into_iter()
-                .filter_map(|(topic, tok)| routes.register(topic, (self.contno, i), tok))
+                .filter_map(|(topic, tok)| routes.register(topic, i, tok))
                 .for_each(|msg| res += TwoWay::from_mqtt(msg));
         }
         debug!("MQTT registry: {:?}", routes);
@@ -68,8 +64,7 @@ impl Bus {
             .collect()
     }
 
-    fn populate(&mut self, lst: parser::List3) -> TwoWay {
-        let mut res = TwoWay::default();
+    fn populate(&mut self, lst: parser::List3) {
         debug!("[{}] Loading device list", self.contno);
         for (i, dev) in lst.into_iter().enumerate().take(30) {
             // devices[0] is reserved for the controller
@@ -79,15 +74,14 @@ impl Bus {
                 *slot = Model::select(dev);
             }
             if slot.configured() {
-                res += TwoWay::mqtt(slot.set_status(status));
+                slot.info_mut().status = status;
             }
         }
         info!("{}", self);
         self.register_1wire();
-        res
     }
 
-    fn set_controller(&mut self, contno: u8, csi: CSI) -> Result<TwoWay> {
+    pub fn set_controller(&mut self, contno: u8, csi: CSI) -> Result<TwoWay> {
         info!(
             "[{}] Controller {} S/N {} FW {}",
             contno, csi.artno, csi.serno, csi.fw
@@ -103,6 +97,8 @@ impl Bus {
             artno: csi.artno.clone(),
             name: None,
         });
+        // push down to actual device handler
+        // this allows for additional initialization actions there
         Ok(slot.handle_1wire(OW {
             contno,
             msg: Msg::CSI(csi),
@@ -114,11 +110,7 @@ impl Bus {
         self.devices
             .iter()
             .filter(|m| m.configured())
-            .flat_map(|d| {
-                let mut msgs = d.announce();
-                msgs.extend(d.get_status());
-                msgs
-            })
+            .flat_map(|d| d.announce())
             .collect()
     }
 
@@ -128,13 +120,13 @@ impl Bus {
     }
 
     /// Main processing entry point for incoming 1-Wire events.
-    pub fn handle_1wire(&mut self, resp: OW, routes: &mut Routes<(u8, usize)>) -> Result<TwoWay> {
+    pub fn handle_1wire(&mut self, resp: OW, routes: &mut Routes<usize>) -> Result<TwoWay> {
         let contno = resp.contno;
         match resp.msg {
             Msg::CSI(csi) => return self.set_controller(contno, csi),
             Msg::List3(l) => {
-                let mut res = self.populate(l);
-                res += self.register_mqtt(routes);
+                self.populate(l);
+                let res = self.register_mqtt(routes);
                 let init_cmds = self.init();
                 let discovery_ann = self.announce();
                 return Ok(res + TwoWay::new(discovery_ann, init_cmds));

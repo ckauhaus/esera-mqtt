@@ -31,7 +31,7 @@ impl Device for Hub {
                 res.push(MqttMsg::new(
                     disc_topic("sensor", &self.info, format_args!("{}", topic)),
                     serde_json::to_string(&json!({
-                        "availability_topic": self.info.topic("status"),
+                        "availability_topic": self.info.status_topic(),
                         "device_class": measure,
                         "device": &dev,
                         "expire_after": 300,

@@ -8,7 +8,7 @@ fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: usize) ->
     MqttMsg::new(
         disc_topic("switch", &info, format_args!("ch{}", ch)),
         serde_json::to_string(&json!({
-                "availability_topic": info.topic("status"),
+                "availability_topic": info.status_topic(),
                 "command_topic": info.fmt(format_args!("set/ch{}", ch)),
                 "state_topic": info.fmt(format_args!("out/ch{}", ch)),
                 "device": dev,

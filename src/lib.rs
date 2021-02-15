@@ -88,6 +88,10 @@ impl DeviceInfo {
         self.fmt(format_args!("{}", item.as_ref()))
     }
 
+    pub fn status_topic(&self) -> String {
+        format!("ESERA/{}/status", self.contno)
+    }
+
     /// Status topic of the associated controller
     pub fn ctrl_status(&self) -> String {
         format!("ESERA/{}/status", self.contno)

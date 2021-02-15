@@ -47,7 +47,7 @@ impl Device for BinarySensor {
                     MqttMsg::new(
                         disc_topic("binary_sensor", &self.info, format_args!("ch{}", ch)),
                         serde_json::to_string(&json!({
-                            "availability_topic": self.info.topic("status"),
+                            "availability_topic": self.info.status_topic(),
                             "device": &dev,
                             "expire_after": 300,
                             "name": format!("In {}/{}.{}", self.info.contno, self.name(), ch),

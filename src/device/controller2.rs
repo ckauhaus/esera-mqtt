@@ -89,7 +89,7 @@ impl Device for Controller2 {
             MqttMsg::new(
                 disc_topic("binary_sensor", &self.info, format_args!("button_{}", ch)),
                 serde_json::to_string(&json!({
-                        "availability_topic": self.info.topic("status"),
+                        "availability_topic": self.info.status_topic(),
                         "state_topic": self.info.fmt(format_args!("in/ch{}", ch)),
                         "device": &dev,
                         "name": format!("Controller.{} in {}", self.info.contno, ch),
@@ -115,7 +115,7 @@ impl Device for Controller2 {
             res.push(MqttMsg::new(
                 disc_topic("switch", &self.info, format_args!("ch{}", ch)),
                 serde_json::to_string(&json!({
-                        "availability_topic": self.info.topic("status"),
+                        "availability_topic": self.info.status_topic(),
                         "command_topic": self.info.fmt(format_args!("set/ch{}", ch)),
                         "state_topic": self.info.fmt(format_args!("out/ch{}", ch)),
                         "device": &dev,
@@ -131,7 +131,7 @@ impl Device for Controller2 {
         res.push(MqttMsg::new(
             disc_topic("light", &self.info, format_args!("ana")),
             serde_json::to_string(&json!({
-                    "availability_topic": self.info.topic("status"),
+                    "availability_topic": self.info.status_topic(),
                     "brightness_command_topic": self.info.topic("set/ana"),
                     "brightness_state_topic": self.info.topic("out/ana"),
                     "brightness_scale": 10.0,

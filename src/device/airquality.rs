@@ -20,7 +20,7 @@ fn mkann(
             info.contno, info.serno, short
         ),
         serde_json::to_string(&json!({
-            "availability_topic": info.topic("status"),
+            "availability_topic": info.status_topic(),
             "device": &dev,
             "device_class": class,
             "expire_after": 600,
