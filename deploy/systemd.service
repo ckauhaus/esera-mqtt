@@ -5,7 +5,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/mqtt-{{ item.name }} {{ item.args }}
+ExecStart=/usr/local/bin/mqtt-{{ item.exe }} {{ item.args }}
 RestartSec=3
 Restart=on-failure
 StartLimitInterval=90

@@ -11,10 +11,12 @@
   become: yes
   vars:
     items:
-      - name: esera-bridge
+      - name: esera-bridge@
+        exe: esera-bridge
         description: MQTT/ESERA bridge
-        args: 192.168.208.11 192.168.208.12 192.168.208.13
+        args: "%i"
       - name: climate
+        exe: climate
         description: MQTT virtual climate controller
         args: /usr/local/etc/mqtt-climate.toml
     mqtt_pass: !vault |
@@ -27,8 +29,8 @@
   tasks:
     - name: executables
       ansible.builtin.copy:
-        src: ../target/release/{{ item.name }}
-        dest: /usr/local/bin/mqtt-{{ item.name }}
+        src: ../target/release/{{ item.exe }}
+        dest: /usr/local/bin/mqtt-{{ item.exe }}
         mode: '0755'
       loop: "{{ items }}"
     - name: mqtt.env config
@@ -47,7 +49,11 @@
     - name: systemd services
       ansible.builtin.systemd:
         enabled: yes
-        name: mqtt-{{ item.name }}
+        name: mqtt-{{ item }}
         state: restarted
         daemon_reload: true
-      loop: "{{ items }}"
+      loop:
+        - climate
+        - esera-bridge@192.168.208.11
+        - esera-bridge@192.168.208.12
+        - esera-bridge@192.168.208.13
