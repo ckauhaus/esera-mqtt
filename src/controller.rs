@@ -1,5 +1,4 @@
-use crate::parser::{self, Msg, OW};
-use crate::pick;
+use crate::parser::{self, Msg, MsgKind, OW};
 
 use chrono::Local;
 use crossbeam::atomic::AtomicCell;
@@ -45,33 +44,27 @@ impl ControllerConnection<TcpStream> {
         info!("Connecting to 1-Wire controller at {:?}", addr);
         let conn = TcpStream::connect(&addr)?;
         conn.set_nodelay(false)?;
+        conn.set_read_timeout(Some(Duration::new(300, 0)))?;
         let reader = conn.try_clone().unwrap();
         let c = Self::from_streams(reader, conn);
         c.setup()?;
         Ok(c)
     }
 
-    pub fn reconnect<A: ToSocketAddrs>(&mut self, addr: A) -> Result<()> {
-        let addr: Vec<_> = addr.to_socket_addrs()?.collect();
-        info!("Connecting to 1-Wire controller at {:?}", addr);
-        let stream = TcpStream::connect(&*addr)?;
-        self.reader = Mutex::new(stream.try_clone().unwrap());
-        self.writer = Mutex::new(stream);
-        self.setup()
-    }
-
     fn setup(&self) -> Result<()> {
         self.send_line("SET,SYS,DATAPRINT,1".to_owned())?;
-        pick!(self, Dataprint)?;
+        self.pick(MsgKind::Dataprint)?;
         let now = Local::now();
         self.send_line(format!("SET,SYS,DATE,{}", now.format("%d.%m.%y")))?;
-        pick!(self, Date)?;
+        self.pick(MsgKind::Date)?;
         self.send_line(format!("SET,SYS,TIME,{}", now.format("%H:%M:%S")))?;
-        pick!(self, Time)?;
+        self.pick(MsgKind::Time)?;
+        self.send_line("SET,SYS,KALSENDTIME,120")?;
+        self.pick(MsgKind::Kalsendtime)?;
         self.send_line("SET,SYS,DATATIME,30")?;
-        pick!(self, Datatime)?;
+        self.pick(MsgKind::Datatime)?;
         self.send_line("SET,SYS,SAVE")?;
-        pick!(self, Save)?;
+        self.pick(MsgKind::Save)?;
         Ok(())
     }
 }
@@ -139,6 +132,7 @@ where
         Ok(true)
     }
 
+    /// Returns top queue item or waits for new data if the queue is empty.
     pub fn get(&self) -> Option<Result<OW>> {
         while self.queue.lock().is_empty() {
             thread::sleep(Duration::from_millis(10));
@@ -153,48 +147,42 @@ where
 
     pub fn csi(&mut self) -> Result<OW> {
         self.send_line("GET,SYS,INFO")?;
-        let csi = pick!(&self, CSI)?;
+        let csi = self.pick(MsgKind::CSI)?;
         self.contno = csi.contno;
         Ok(csi)
     }
 
     pub fn list(&self) -> Result<OW> {
         self.send_line("GET,OWB,LISTALL1")?;
-        pick!(&self, List3)
+        self.pick(MsgKind::List3)
     }
-}
 
-/// Usage: pick!(&mut conn, RESPONSE_VARIANT) -> Result<RESPONSE_TYPE>
-// XXX rewrite with MsgKind
-#[macro_export]
-macro_rules! pick {
-    ($conn:expr, $res:tt) => {
-        (|| loop {
+    /// Pulls a message of the specified kind from the queue (out of order). Waits for more data
+    /// until a message of the given kind is present.
+    pub fn pick(&self, kind: MsgKind) -> Result<OW> {
+        loop {
             {
-                let mut queue = $conn.queue.lock();
+                let mut queue = self.queue.lock();
                 for (i, item) in queue.iter().enumerate() {
                     if let Ok(resp) = item {
-                        match resp {
-                            OW {
-                                msg: Msg::$res(_), ..
-                            } => return queue.remove(i).unwrap(),
-                            OW {
-                                msg: Msg::Err(e), ..
-                            } => return Err(Error::Controller(*e)),
-                            _ => (),
+                        if MsgKind::from(&resp.msg) == kind {
+                            return queue.remove(i).unwrap();
+                        }
+                        if let Msg::Err(e) = resp.msg {
+                            return Err(Error::Controller(e));
                         }
                     }
                 }
             }
             // item not already present in queue, wait for more data
             std::thread::sleep(Duration::from_millis(10));
-            match $conn.receive() {
+            match self.receive() {
                 Ok(true) => (),
                 Ok(false) => return Err(Error::Disconnected),
                 Err(e) => return Err(e),
             }
-        })()
-    };
+        }
+    }
 }
 
 impl<S> ControllerConnection<S>
@@ -304,7 +292,7 @@ mod test {
             Cursor::new(B("1_DATE|20.09.20\n").to_vec()),
             Cursor::new(Vec::new()),
         );
-        let res = pick!(c, Date).unwrap();
+        let res = c.pick(MsgKind::Date).unwrap();
         assert_eq!(res.msg, Msg::Date("20.09.20".into()));
         assert!(c.queue.lock().is_empty());
     }
@@ -320,7 +308,7 @@ mod test {
             ),
             Cursor::new(Vec::new()),
         );
-        let res = pick!(c, Dataprint).unwrap();
+        let res = c.pick(MsgKind::Dataprint).unwrap();
         assert_matches!(res, OW { msg: Msg::Dataprint('1'), ..});
         let mut q = c.queue.into_inner().into_iter().map(|r| r.unwrap());
         assert_eq!(q.next().unwrap().msg, Msg::Keepalive('1'));

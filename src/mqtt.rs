@@ -1,7 +1,9 @@
+use crossbeam::atomic::AtomicCell;
 use crossbeam::channel::{self, Receiver, Sender};
 use rumqttc::{ConnectReturnCode, Event, MqttOptions, Packet, QoS};
 use slog::{debug, error, info, o, warn, Drain, Logger};
 use std::fmt;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use thiserror::Error;
@@ -117,6 +119,7 @@ impl fmt::Display for MqttMsg {
 pub struct MqttConnection {
     host: String,
     client: rumqttc::Client,
+    shutdown: Arc<AtomicCell<bool>>,
     log: Logger,
 }
 
@@ -185,7 +188,13 @@ impl MqttConnection {
         }
         if success {
             let (tx, rx) = channel::unbounded();
-            let mut this = Self { host, client, log };
+            let shutdown = Arc::new(AtomicCell::new(false));
+            let mut this = Self {
+                host,
+                client,
+                shutdown,
+                log,
+            };
             this.recv_loop(conn, tx);
             this.send(MqttMsg::retain(status_topic.as_ref(), "online"))?;
             Ok((this, rx))
@@ -196,25 +205,29 @@ impl MqttConnection {
 
     fn recv_loop(&self, mut conn: rumqttc::Connection, tx: Sender<MqttMsg>) {
         let log = self.log.clone();
+        let shutdown = self.shutdown.clone();
         std::thread::Builder::new()
             .name("MQTT reader".into())
             .spawn(move || {
                 let mut retry = 200;
                 for evt in conn.iter() {
+                    if shutdown.load() {
+                        debug!(log, "MQTT conn obj dropped");
+                        return;
+                    }
                     match evt {
                         Ok(Event::Incoming(pck)) => match process_packet(pck, &tx, &log) {
-                            Err(Error::Send(_)) => {
-                                info!(log, "Disconnecting from MQTT broker");
+                            Err(_) => {
+                                warn!(log, "MQTT channel disconnected");
                                 return;
                             }
-                            Err(e) => warn!(log, "Failed to process incoming packet: {}", e),
                             Ok(_) => (),
                         },
                         Ok(Event::Outgoing(_)) => (),
                         Err(e) => {
                             error!(log, "{}, reconnecting in {} ms", e, retry);
                             thread::sleep(Duration::from_millis(retry));
-                            if retry < 20_000 {
+                            if retry < 10_000 {
                                 retry = retry * 6 / 5;
                             }
                         }
@@ -254,5 +267,11 @@ impl MqttConnection {
 impl fmt::Debug for MqttConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         write!(f, "MqttConnection({})", self.host)
+    }
+}
+
+impl Drop for MqttConnection {
+    fn drop(&mut self) {
+        self.shutdown.store(true);
     }
 }

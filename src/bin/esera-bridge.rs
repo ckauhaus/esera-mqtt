@@ -6,6 +6,7 @@ use crossbeam::channel::{self, Receiver, Sender};
 use std::fmt;
 use std::net::ToSocketAddrs;
 use std::thread;
+use std::time::Duration;
 use structopt::StructOpt;
 use thiserror::Error;
 
@@ -21,7 +22,7 @@ pub enum Error {
     MqttClosed,
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(StructOpt, Clone, Debug)]
 struct Opt {
     /// Host name or IP address of a ESERA controller
     ///
@@ -69,7 +70,7 @@ struct App {
 }
 
 impl App {
-    fn new(opt: Opt) -> Result<Self> {
+    fn new(opt: &Opt) -> Result<Self> {
         let (ctrl_tx, ctrl_rx) = if opt.controller.find(':').is_some() {
             ctrl_loop(opt.controller.clone())
         } else {
@@ -77,7 +78,7 @@ impl App {
         }
         .context("Failed to set up initial controller connection")?;
         Ok(Self {
-            opt,
+            opt: opt.clone(),
             ctrl_tx,
             ctrl_rx,
             bus: Bus::default(),
@@ -88,10 +89,11 @@ impl App {
     fn handle(&mut self) -> Result<()> {
         // process first controller message separately to figure out controller number
         let resp = self.ctrl_rx.recv().map_err(|_| Error::ChanClosed)??;
+        let contno = resp.contno;
         let (mut mqtt, mqtt_chan) = MqttConnection::new(
             &self.opt.mqtt_host,
             &self.opt.mqtt_cred,
-            format!("ESERA/{}/status", resp.contno),
+            format!("ESERA/{}/status", contno),
             None,
         )?;
         self.bus.handle_1wire(resp, &mut self.routes)?;
@@ -107,7 +109,11 @@ impl App {
                             .bus
                             .handle_1wire(resp, &mut self.routes)?
                             .send(&mut mqtt, &self.ctrl_tx)?,
-                        Err(e) => error!("{}", e),
+                        Err(ControllerError::Transport(e)) => {
+                            error!("[{}] No data received from controller ({})", contno, e);
+                            return Err(Error::ChanClosed.into());
+                        }
+                        Err(e) => warn!("[{}] Controller read: {}", contno, e),
                     };
                 }
                 i if i == mqtt_idx => {
@@ -133,24 +139,24 @@ impl App {
             }
         }
     }
+}
 
-    fn run(&mut self) -> Result<()> {
-        debug!("Entering main event loop");
-        loop {
-            match self.handle() {
-                Ok(_) => continue,
-                // Err(Error::ChanClosed(i)) => reconnect(i), // XXX
-                // Err(Error::MqttClosed) => reregister(),    // XXX
-                Err(e) => error!("{}", e),
-            }
+fn run(opt: Opt) -> Result<()> {
+    debug!("Entering main event loop");
+    loop {
+        match App::new(&opt).and_then(|mut app| app.handle()) {
+            Ok(_) => return Ok(()),
+            Err(e) => error!("{}", e),
         }
+        warn!("Connection lost, retrying in 5s");
+        thread::sleep(Duration::new(5, 0));
     }
 }
 
 fn main() {
     dotenv::dotenv().ok();
     env_logger::builder().format_timestamp(None).init();
-    if let Err(e) = App::new(Opt::from_args()).and_then(|mut app| app.run()) {
+    if let Err(e) = run(Opt::from_args()) {
         error!("FATAL: {}", e);
         std::process::exit(1)
     }

@@ -34,6 +34,7 @@ pub enum Msg {
     Rst(Rst),
     Rdy(Rdy),
     Save(Save),
+    Kalsendtime(Kalsendtime),
     Dataprint(Dataprint),
     Datatime(Datatime),
     Date(Date),
@@ -154,6 +155,18 @@ pub fn save(i: &str) -> PResult<OW> {
         |(contno, flag)| OW {
             contno,
             msg: Msg::Save(flag),
+        },
+    )(i)
+}
+
+pub type Kalsendtime = u8;
+
+pub fn kalsendtime(i: &str) -> PResult<OW> {
+    map(
+        tuple((header("KALSENDTIME"), terminated(digit1, line_ending))),
+        |(contno, s)| OW {
+            contno,
+            msg: Msg::Kalsendtime(s.parse().expect("8-bit integer")),
         },
     )(i)
 }
@@ -392,8 +405,23 @@ pub fn owdstatus(i: &str) -> PResult<OW> {
 
 pub fn parse(i: &str) -> PResult<OW> {
     alt((
-        kal, inf, err, evt, rst, rdy, save, dataprint, datatime, date, time, lst3, csi, dio,
-        owdstatus, devstatus,
+        kal,
+        inf,
+        err,
+        evt,
+        rst,
+        rdy,
+        save,
+        kalsendtime,
+        dataprint,
+        datatime,
+        date,
+        time,
+        lst3,
+        csi,
+        dio,
+        owdstatus,
+        devstatus,
     ))(i)
 }
 
