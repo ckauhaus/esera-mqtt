@@ -1,9 +1,9 @@
 ESERA/MQTT bridge
 =================
 
-Interface between (ESERA)[https://www.esera.de/] smart home controllers and MQTT
+Interface between [ESERA](https://www.esera.de/) smart home controllers and MQTT
 messaging infrastructure. It was primarily developed to integrate ESERA
-controllers with (Home Assistant)[https://www.home-assistant.io/].
+controllers with [Home Assistant](https://www.home-assistant.io/).
 
 
 Usage
@@ -152,5 +152,5 @@ controls.
 Author & License
 ================
 
-This package is maintained by (Christian Kauhaus)[mailto:christian@kauhaus.de]
+This package is maintained by [Christian Kauhaus](mailto:christian@kauhaus.de)
 and published under the BSD 3-Clause "New" license.
