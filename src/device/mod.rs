@@ -3,6 +3,7 @@ use crate::{DeviceInfo, MqttMsg, Token, TwoWay};
 
 use enum_dispatch::enum_dispatch;
 use serde::Serialize;
+use serde_json::json;
 use std::fmt;
 use thiserror::Error;
 
@@ -83,11 +84,43 @@ pub trait Device {
         }
     }
 
+    /// Helper to create a device automation trigger (a.k.a. press button) MQTT announcement.
+    /// `typ` should be "long" or "short". `pl` should be "1" for button press or "0" for button
+    /// release.
+    fn announce_trigger(&self, dev: &AnnounceDevice, ch: u8, typ: &str, pl: &str) -> MqttMsg {
+        let info = self.info();
+        let direction = match pl {
+            "0" => "release",
+            "1" => "press",
+            _ => panic!("BUG: invalid button payload"),
+        };
+        MqttMsg::new(
+            disc_topic(
+                "device_automation",
+                info,
+                format_args!("button_{}_{}", ch, direction),
+            ),
+            serde_json::to_string(&json!({
+                "device": dev,
+                "automation_type": "trigger",
+                "payload": pl,
+                "topic": info.fmt(format_args!("in/ch{}", ch)),
+                "type": format!("button_{}_{}", typ, direction),
+                "subtype": format!("button_{}", ch)
+            }))
+            .unwrap(),
+        )
+    }
+
     /// Returns list of 1-Wire busaddrs (e.g., OWD14_1) for which events should be routed to this
     /// component.
-    fn register_1wire(&self) -> Vec<String>;
+    fn register_1wire(&self) -> Vec<String> {
+        Vec::new()
+    }
 
-    fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay>;
+    fn handle_1wire(&mut self, _ow: OW) -> Result<TwoWay> {
+        Ok(TwoWay::default())
+    }
 
     /// Returns a list of topics which should be handled by this device. Each topic is assiociated
     /// with an opaque token which helps during event processing to associate the message to the
@@ -281,13 +314,17 @@ mod test {
 mod airquality;
 mod binary_sensor;
 mod controller2;
+mod dimmer;
 mod hub;
+mod shutter;
 mod switch8;
 
 use airquality::{AirQuality, TempHum};
 use binary_sensor::BinarySensor;
 use controller2::Controller2;
+use dimmer::Dimmer;
 use hub::Hub;
+use shutter::Shutter;
 use switch8::Switch8;
 
 #[enum_dispatch(Device)]
@@ -299,6 +336,8 @@ pub enum Model {
     Hub(Hub),
     Switch8(Switch8),
     TempHum(TempHum),
+    Dimmer(Dimmer),
+    Shutter(Shutter),
     Unknown(Unknown),
 }
 
@@ -310,6 +349,8 @@ impl Model {
             "11151" => Self::AirQuality(AirQuality::new(info)),
             "11216" => Self::BinarySensor(BinarySensor::new(info)),
             "11220" | "11228" | "11229" => Self::Switch8(Switch8::new(info)),
+            "11221" => Self::Dimmer(Dimmer::new(info)),
+            "11231" => Self::Shutter(Shutter::new(info)),
             "11322" => Self::Hub(Hub::new(info)),
             "11340" => Self::Controller2(Controller2::new(info)),
             _ => Self::Unknown(Unknown::new(info)),

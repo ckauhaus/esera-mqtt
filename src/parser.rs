@@ -321,6 +321,17 @@ pub struct Devstatus {
     pub val: i32,
 }
 
+impl Devstatus {
+    /// "OWD3_4" -> Some(4)
+    /// "SYS" -> None
+    pub fn subaddr(&self) -> Option<u8> {
+        self.addr
+            .rsplit('_')
+            .next()
+            .and_then(|v| v.parse::<u8>().ok())
+    }
+}
+
 pub fn devstatus(i: &str) -> PResult<OW> {
     map_res(
         tuple((

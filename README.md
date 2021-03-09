@@ -117,6 +117,16 @@ humidity sensor (11150):
     ESERA/<N>/OWDx/co2 529.6
 
 
+Dimmer (11221)
+--------------
+
+...
+
+Shutter Pro (11231)
+-------------------
+
+...
+
 Device renaming
 ===============
 

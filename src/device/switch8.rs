@@ -4,7 +4,7 @@ use crate::{Device, DeviceInfo, MqttMsg, TwoWay};
 
 use serde_json::json;
 
-fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: usize) -> MqttMsg {
+fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: u8) -> MqttMsg {
     MqttMsg::new(
         disc_topic("switch", &info, format_args!("ch{}", ch)),
         serde_json::to_string(&json!({
@@ -16,7 +16,6 @@ fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: usize) ->
                 "payload_on": "1",
                 "payload_off": "0",
                 "unique_id": format!("{}_ch{}", info.serno, ch),
-                "qos": 1,
             }
         ))
         .unwrap(),
@@ -42,19 +41,30 @@ impl Device for Switch8 {
 
     fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
         Ok(match resp.msg {
-            Msg::Devstatus(s) => {
-                debug!("[{}] Switch8 {} is {:b}", resp.contno, s.addr, s.val);
-                match s.addr.rsplit('_').next().unwrap() {
-                    "1" => {
-                        let res = digital_io(&self.info, 8, "in", s.val, None)
-                            + digital_io(&self.info, 8, "button", s.val, Some(self.inputs));
-                        self.inputs = s.val;
-                        res
-                    }
-                    "3" => digital_io(&self.info, 8, "out", s.val, None),
-                    other => panic!("BUG: Unknown busaddr {}", other),
+            Msg::Devstatus(s) => match s.subaddr() {
+                Some(1) => {
+                    debug!(
+                        "[{}] Switch8 {} inputs={:08b}",
+                        resp.contno,
+                        self.name(),
+                        s.val
+                    );
+                    let res = digital_io(&self.info, 8, "in", s.val, None)
+                        + digital_io(&self.info, 8, "button", s.val, Some(self.inputs));
+                    self.inputs = s.val;
+                    res
                 }
-            }
+                Some(3) => {
+                    debug!(
+                        "[{}] Switch8 {} outputs={:08b}",
+                        resp.contno,
+                        self.name(),
+                        s.val
+                    );
+                    digital_io(&self.info, 8, "out", s.val, None)
+                }
+                _ => panic!("BUG: Unknown busaddr {}", s.addr),
+            },
             _ => {
                 warn!("[{}] Switch8: no handler for {:?}", self.info.contno, resp);
                 TwoWay::default()
@@ -65,29 +75,9 @@ impl Device for Switch8 {
     fn announce(&self) -> Vec<MqttMsg> {
         let mut res = Vec::with_capacity(20);
         let dev = self.announce_device();
-        let trigger = |ch, dir, pl| {
-            MqttMsg::new(
-                disc_topic(
-                    "device_automation",
-                    &self.info,
-                    format_args!("button_{}_{}", ch, dir),
-                ),
-                serde_json::to_string(&json!({
-                    "device": &dev,
-                    "automation_type": "trigger",
-                    "payload": pl,
-                    "qos": 1,
-                    "topic": self.info.fmt(format_args!("in/ch{}", ch)),
-                    "type": format!("button_short_{}", dir),
-                    "subtype": format!("button_{}", ch)
-                }))
-                .unwrap(),
-            )
-        };
         for ch in 1..=8 {
-            for (dir, pl) in &[("press", "1"), ("release", "0")] {
-                res.push(trigger(ch, dir, pl));
-            }
+            res.push(self.announce_trigger(&dev, ch, "short", "0"));
+            res.push(self.announce_trigger(&dev, ch, "short", "1"));
             res.push(ann_out_ch(&dev, self.name(), &self.info, ch));
         }
         res

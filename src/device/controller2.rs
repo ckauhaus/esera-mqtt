@@ -67,24 +67,6 @@ impl Device for Controller2 {
         dev.sw_version = Some(self.sw_version.clone());
         dev.via_device = None;
         let mut res = Vec::with_capacity(20);
-        let trigger = |ch, dur, dir, pl| {
-            MqttMsg::new(
-                disc_topic(
-                    "device_automation",
-                    &self.info,
-                    format_args!("button_{}_{}", ch, dir),
-                ),
-                serde_json::to_string(&json!({
-                    "device": &dev,
-                    "automation_type": "trigger",
-                    "payload": pl,
-                    "topic": self.info.fmt(format_args!("button/ch{}", ch)),
-                    "type": format!("button_{}_{}", dur, dir),
-                    "subtype": format!("button_{}", ch),
-                }))
-                .unwrap(),
-            )
-        };
         let binary_sensor = |ch| {
             MqttMsg::new(
                 disc_topic("binary_sensor", &self.info, format_args!("button_{}", ch)),
@@ -106,9 +88,8 @@ impl Device for Controller2 {
             DIO::LinkedLevel | DIO::IndependentLevel => "long",
         };
         for ch in 1..=4 {
-            for (dir, pl) in &[("press", "1"), ("release", "0")] {
-                res.push(trigger(ch, dur, dir, pl));
-            }
+            res.push(self.announce_trigger(&dev, ch, dur, "0"));
+            res.push(self.announce_trigger(&dev, ch, dur, "1"));
             res.push(binary_sensor(ch));
         }
         for ch in 1..=5 {

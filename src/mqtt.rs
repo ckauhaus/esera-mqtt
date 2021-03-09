@@ -168,7 +168,7 @@ impl MqttConnection {
             qos: QoS::AtMostOnce,
             retain: true,
         });
-        let (client, mut conn) = rumqttc::Client::new(opt, 10);
+        let (client, mut conn) = rumqttc::Client::new(opt, 100);
         let mut success = false;
         for item in conn.iter().take(3) {
             match item {
