@@ -90,6 +90,9 @@ impl Device for Shutter {
                 "state_topic": i.topic("state"),
                 "unique_id": i.serno,
                 "optimistic": false,
+                "state_opening": "opening",
+                "state_closing": "closing",
+                "state_stopped": "stopped",
             }))
             .unwrap(),
         ));

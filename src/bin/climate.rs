@@ -133,12 +133,9 @@ fn run(opt: Opt, log: &Logger) -> Result<()> {
 fn main() {
     dotenv::dotenv().ok();
     let opt = Opt::from_args();
-    #[cfg(not(debug_assertions))]
-    let log = Logger::root(slog_journald::JournaldDrain.ignore_res(), o!());
-    #[cfg(debug_assertions)]
     let log = {
         let d = slog_term::TermDecorator::new().build();
-        let d = slog_term::FullFormat::new(d).build().fuse();
+        let d = slog_term::CompactFormat::new(d).build().fuse();
         let d = slog_async::Async::new(d).build().fuse();
         Logger::root(d, o!())
     };

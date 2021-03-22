@@ -43,9 +43,9 @@ struct Opt {
 
 type ChannelPair<O, I> = (Sender<O>, Receiver<I>);
 
-fn ctrl_loop<A>(addr: A) -> Result<ChannelPair<String, Result<OW, ControllerError>>>
+fn ctrl_loop<'a, A>(addr: A) -> Result<ChannelPair<String, Result<OW, ControllerError>>>
 where
-    A: ToSocketAddrs + Clone + fmt::Debug + Send + 'static,
+    A: ToSocketAddrs + Clone + fmt::Debug + Send + 'a,
 {
     let (up_tx, up_rx) = channel::unbounded();
     let (down_tx, down_rx) = channel::unbounded();
@@ -72,9 +72,9 @@ struct App {
 impl App {
     fn new(opt: &Opt) -> Result<Self> {
         let (ctrl_tx, ctrl_rx) = if opt.controller.find(':').is_some() {
-            ctrl_loop(opt.controller.clone())
+            ctrl_loop(opt.controller.as_str())
         } else {
-            ctrl_loop((opt.controller.clone(), opt.default_port))
+            ctrl_loop((opt.controller.as_str(), opt.default_port))
         }
         .context("Failed to set up initial controller connection")?;
         Ok(Self {

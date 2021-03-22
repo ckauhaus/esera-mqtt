@@ -33,8 +33,8 @@ const TOK_AUX_STATE: Token = 6;
 lazy_static! {
     static ref DEVICE: AnnounceDevice = AnnounceDevice {
         identifiers: vec![
-            env!("CARGO_CRATE_NAME").into(),
-            format!("{} {}", env!("CARGO_CRATE_NAME"), env!("CARGO_PKG_VERSION"))
+            env!("CARGO_PKG_NAME").into(),
+            format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
         ],
         manufacturer: env!("CARGO_PKG_AUTHORS").into(),
         model: "Virtual HVAC".into(),
@@ -89,7 +89,9 @@ enum Action {
     Heating,
 }
 
-#[derive(Debug, Clone, PartialEq, IntoStaticStr, strum_macros::Display, EnumString, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, IntoStaticStr, strum_macros::Display, EnumString, Deserialize,
+)]
 enum Mode {
     #[strum(serialize = "off")]
     Off,
@@ -132,7 +134,7 @@ impl Climate {
     fn discovery(&self) -> Discovery<'_> {
         let unique_id = format!(
             "{}::climate::virtual::{}",
-            env!("CARGO_CRATE_NAME"),
+            env!("CARGO_PKG_NAME"),
             self.name
         );
         Discovery {
