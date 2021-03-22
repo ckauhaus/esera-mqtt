@@ -73,7 +73,7 @@ impl Device for Shutter {
             res.push(self.announce_trigger(&dev, *button, "short", "0"));
             res.push(self.announce_trigger(&dev, *button, "short", "1"));
         }
-        res.push(MqttMsg::new(
+        res.push(MqttMsg::retain(
             format!(
                 "homeassistant/cover/{}/{}/config",
                 i.contno,

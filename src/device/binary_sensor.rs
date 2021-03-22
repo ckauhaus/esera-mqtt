@@ -44,7 +44,7 @@ impl Device for BinarySensor {
         (1..=8)
             .map({
                 |ch| {
-                    MqttMsg::new(
+                    MqttMsg::retain(
                         disc_topic("binary_sensor", &self.info, format_args!("ch{}", ch)),
                         serde_json::to_string(&json!({
                             "availability_topic": self.info.status_topic(),

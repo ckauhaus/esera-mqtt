@@ -28,7 +28,7 @@ impl Device for Hub {
         for voltage in &[12, 5] {
             for (name, measure) in &[("cur", "current"), ("vdd", "voltage")] {
                 let topic = format!("{}_{}", name, voltage);
-                res.push(MqttMsg::new(
+                res.push(MqttMsg::retain(
                     disc_topic("sensor", &self.info, format_args!("{}", topic)),
                     serde_json::to_string(&json!({
                         "availability_topic": self.info.status_topic(),

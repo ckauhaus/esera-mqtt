@@ -82,7 +82,7 @@ impl Device for Dimmer {
         for ch in &[1, 2] {
             res.push(self.announce_trigger(&dev, *ch, "short", "0"));
             res.push(self.announce_trigger(&dev, *ch, "short", "1"));
-            res.push(MqttMsg::new(
+            res.push(MqttMsg::retain(
                 disc_topic("light", &self.info, format_args!("ch{}", ch)),
                 serde_json::to_string(&json!({
                     "availability_topic": self.info.status_topic(),

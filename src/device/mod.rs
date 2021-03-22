@@ -94,7 +94,7 @@ pub trait Device {
             "1" => "press",
             _ => panic!("BUG: invalid button payload"),
         };
-        MqttMsg::new(
+        MqttMsg::retain(
             disc_topic(
                 "device_automation",
                 info,

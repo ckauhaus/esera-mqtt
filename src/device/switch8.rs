@@ -5,7 +5,7 @@ use crate::{Device, DeviceInfo, MqttMsg, TwoWay};
 use serde_json::json;
 
 fn ann_out_ch(dev: &AnnounceDevice, name: &str, info: &DeviceInfo, ch: u8) -> MqttMsg {
-    MqttMsg::new(
+    MqttMsg::retain(
         disc_topic("switch", &info, format_args!("ch{}", ch)),
         serde_json::to_string(&json!({
                 "availability_topic": info.status_topic(),

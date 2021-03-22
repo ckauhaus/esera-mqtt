@@ -68,7 +68,7 @@ impl Device for Controller2 {
         dev.via_device = None;
         let mut res = Vec::with_capacity(20);
         let binary_sensor = |ch| {
-            MqttMsg::new(
+            MqttMsg::retain(
                 disc_topic("binary_sensor", &self.info, format_args!("button_{}", ch)),
                 serde_json::to_string(&json!({
                         "availability_topic": self.info.status_topic(),
@@ -93,7 +93,7 @@ impl Device for Controller2 {
             res.push(binary_sensor(ch));
         }
         for ch in 1..=5 {
-            res.push(MqttMsg::new(
+            res.push(MqttMsg::retain(
                 disc_topic("switch", &self.info, format_args!("ch{}", ch)),
                 serde_json::to_string(&json!({
                         "availability_topic": self.info.status_topic(),
