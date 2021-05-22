@@ -279,6 +279,13 @@ impl Climate {
             res.extend(self.set_aux(false));
             return res;
         }
+        if self.temp_cur >= self.temp_set - 0.1 && self.aux_on {
+            info!(
+                self.log,
+                "Turning aux heating off ({}={:.2} °C)", self.name, self.temp_cur
+            );
+            res.extend(self.set_aux(false));
+        }
         match (self.temp_cur < self.temp_set, self.heating_on) {
             (true, false) => {
                 info!(
@@ -297,7 +304,6 @@ impl Climate {
                     "Turning heating off ({}={:.2} °C)", self.name, self.temp_cur
                 );
                 res.push(MqttMsg::new(&self.conf.heat_cmnd, bool2str(false)));
-                res.extend(self.set_aux(false));
             }
             _ => (),
         }
