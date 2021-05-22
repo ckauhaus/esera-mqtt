@@ -2,15 +2,123 @@ use super::{digital_io, Device, DeviceInfo, MqttMsg, Result, Token, TwoWay};
 use crate::parser::{Msg, OW};
 
 use serde_json::json;
+use std::time::Instant;
+
+const DEF_TIME: f32 = 60.0;
+
+#[derive(Debug, Eq, PartialEq, Clone, Copy, strum_macros::IntoStaticStr, strum_macros::Display)]
+enum Direction {
+    #[strum(serialize = "STOP")]
+    Stop = 0,
+    #[strum(serialize = "CLOSE")]
+    Close = 1,
+    #[strum(serialize = "OPEN")]
+    Open = 2,
+}
+
+use Direction::*;
+
+impl Default for Direction {
+    fn default() -> Self {
+        Stop
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Shutter {
     info: DeviceInfo,
     buttons: i32,
+    direction: Direction,
+    start: Option<Instant>,
+    initial_pos: f32,
+    position: f32,
+}
+
+fn clamp(val: f32, min: f32, max: f32) -> f32 {
+    f32::max(f32::min(val, max), min)
 }
 
 impl Shutter {
-    new!(Shutter);
+    pub fn new(info: DeviceInfo) -> Self {
+        Self {
+            info,
+            position: 100.0,
+            initial_pos: 100.0,
+            ..Default::default()
+        }
+    }
+
+    fn time_to(&self, what: Direction) -> f32 {
+        match std::env::var(format!(
+            "SHUTTER_{}_{}_{}_TIME",
+            self.info.contno,
+            self.name(),
+            what
+        )) {
+            Ok(v) => v.trim().parse::<f32>().unwrap_or(DEF_TIME),
+            Err(_) => DEF_TIME,
+        }
+    }
+
+    fn calc(&mut self) {
+        match self.direction {
+            Close => {
+                self.position = self.initial_pos
+                    - clamp(
+                        (Instant::now() - self.start.unwrap()).as_secs_f32() - 1.0,
+                        0.0,
+                        self.time_to(Close),
+                    ) * 100.0
+                        / self.time_to(Close)
+            }
+            Open => {
+                self.position = self.initial_pos
+                    + clamp(
+                        (Instant::now() - self.start.unwrap()).as_secs_f32() - 1.0,
+                        0.0,
+                        self.time_to(Open),
+                    ) * 100.0
+                        / self.time_to(Open)
+            }
+            _ => (),
+        }
+        self.position = clamp(self.position, 0.0, 100.0);
+    }
+
+    fn stop(&mut self) {
+        self.calc();
+        debug!(
+            "[{}] Shutter {} stopping at {}",
+            self.info.contno,
+            self.name(),
+            self.position
+        );
+        self.direction = Stop;
+        self.start = None;
+        self.initial_pos = self.position;
+    }
+
+    fn close(&mut self) {
+        debug!("[{}] Shutter {} closing", self.info.contno, self.name());
+        self.direction = Close;
+        self.start = Some(Instant::now());
+    }
+
+    fn open(&mut self) {
+        debug!("[{}] Shutter {} opening", self.info.contno, self.name());
+        self.direction = Open;
+        self.start = Some(Instant::now());
+    }
+
+    fn state(&self) -> &'static str {
+        match (self.direction, self.position.round() as i32) {
+            (Stop, 100) => "open",
+            (Stop, 0) => "closed",
+            (Stop, _) => "stopped",
+            (Close, _) => "closing",
+            (Open, _) => "opening",
+        }
+    }
 }
 
 impl Device for Shutter {
@@ -25,7 +133,7 @@ impl Device for Shutter {
             Msg::Devstatus(s) => match s.subaddr() {
                 Some(1) => {
                     debug!(
-                        "[{}] Switch8 {} buttons={:02b}",
+                        "[{}] Shutter {} buttons={:02b}",
                         ow.contno,
                         self.name(),
                         s.val
@@ -37,17 +145,47 @@ impl Device for Shutter {
                 }
                 Some(3) => {
                     debug!(
-                        "[{}] Switch8 {} state={:02b}",
+                        "[{}] Shutter {} state={:02b}",
                         ow.contno,
                         self.name(),
                         s.val
                     );
-                    let state = match s.val & 0b11 {
-                        0b01 => "closing",
-                        0b10 => "opening",
-                        _ => "stopped",
-                    };
-                    TwoWay::from_mqtt(MqttMsg::new(self.info.topic("state"), state))
+                    let mut res = TwoWay::default();
+                    match s.val & 0b11 {
+                        0b01 if self.direction != Close => self.close(),
+                        0b10 if self.direction != Open => self.open(),
+                        0b11 => self.stop(),
+                        _ => {
+                            self.calc();
+                            if let Some(start) = self.start {
+                                match self.direction {
+                                    Close
+                                        if (Instant::now() - start).as_secs_f32()
+                                            > self.time_to(Close) =>
+                                    {
+                                        res +=
+                                            self.handle_mqtt(&MqttMsg::new("", "STOP"), 0).unwrap()
+                                    }
+                                    Open if (Instant::now() - start).as_secs_f32()
+                                        > self.time_to(Open) =>
+                                    {
+                                        res +=
+                                            self.handle_mqtt(&MqttMsg::new("", "STOP"), 0).unwrap()
+                                    }
+                                    _ => (),
+                                }
+                            }
+                        }
+                    }
+                    res += TwoWay::new(
+                        vec![
+                            self.info
+                                .mqtt_msg("position", format!("{:1.0}", self.position.round())),
+                            self.info.mqtt_msg("state", self.state()),
+                        ],
+                        vec![],
+                    );
+                    res
                 }
                 _ => panic!("BUG: Unknown busaddr {}", s.addr),
             },
@@ -90,8 +228,11 @@ impl Device for Shutter {
                 "state_topic": i.topic("state"),
                 "unique_id": i.serno,
                 "optimistic": false,
+                "position_topic": i.topic("position"),
                 "state_opening": "opening",
+                "state_open": "open",
                 "state_closing": "closing",
+                "state_closed": "closed",
                 "state_stopped": "stopped",
             }))
             .unwrap(),
@@ -118,7 +259,7 @@ impl Device for Shutter {
             "STOP" => TwoWay::from_1wire(format!("SET,OWD,SHT,{},3", d)),
             _ => {
                 error!(
-                    "[{}] Dimmer {}: unrecognized MQTT command {}",
+                    "[{}] Shutter {}: unrecognized MQTT command {}",
                     self.info.contno,
                     self.name(),
                     pl
