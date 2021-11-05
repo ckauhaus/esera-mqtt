@@ -175,7 +175,7 @@ where
                 }
             }
             // item not already present in queue, wait for more data
-            std::thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10));
             match self.receive() {
                 Ok(true) => (),
                 Ok(false) => return Err(Error::Disconnected),
@@ -225,6 +225,7 @@ where
                                 // other thread has exited
                                 return Ok(());
                             }
+                            thread::sleep(Duration::from_millis(50));
                         }
                         done.store(true);
                         // channel closed
@@ -263,7 +264,13 @@ mod test {
             Cursor::new(B("1_EVT|21:02:43\n").to_vec()),
             Cursor::new(Vec::new()),
         );
-        assert_matches!(c.next(), Some(Ok(OW { msg: Msg::Evt(_), ..})));
+        assert_matches!(
+            c.next(),
+            Some(Ok(OW {
+                msg: Msg::Evt(_),
+                ..
+            }))
+        );
     }
 
     #[test]
@@ -282,7 +289,13 @@ mod test {
             Cursor::new(Vec::new()),
         );
         assert_matches!(c.next(), Some(Err(Error::Parse(_))));
-        assert_matches!(c.next(), Some(Ok(OW { msg: Msg::Inf(_), ..})));
+        assert_matches!(
+            c.next(),
+            Some(Ok(OW {
+                msg: Msg::Inf(_),
+                ..
+            }))
+        );
         assert_matches!(c.next(), None);
     }
 
@@ -309,7 +322,13 @@ mod test {
             Cursor::new(Vec::new()),
         );
         let res = c.pick(MsgKind::Dataprint).unwrap();
-        assert_matches!(res, OW { msg: Msg::Dataprint('1'), ..});
+        assert_matches!(
+            res,
+            OW {
+                msg: Msg::Dataprint('1'),
+                ..
+            }
+        );
         let mut q = c.queue.into_inner().into_iter().map(|r| r.unwrap());
         assert_eq!(q.next().unwrap().msg, Msg::Keepalive('1'));
         assert_eq!(q.next().unwrap().msg, Msg::Date("07.11.20".into()));
