@@ -132,7 +132,7 @@ fn process_packet(pck: Packet, tx: &Sender<MqttMsg>, log: &Logger) -> Result<()>
         }
         Packet::Disconnect => Err(Error::Disconnected),
         Packet::ConnAck(rumqttc::ConnAck {
-            code: ConnectReturnCode::Accepted,
+            code: ConnectReturnCode::Success,
             ..
         }) => {
             info!(log, "Reconnected to MQTT broker");
@@ -173,7 +173,7 @@ impl MqttConnection {
         for item in conn.iter().take(3) {
             match item {
                 Ok(Event::Incoming(Packet::ConnAck(rumqttc::ConnAck {
-                    code: ConnectReturnCode::Accepted,
+                    code: ConnectReturnCode::Success,
                     ..
                 }))) => {
                     success = true;
