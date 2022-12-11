@@ -96,6 +96,58 @@ impl Device for TempHum {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Temperature {
+    info: DeviceInfo,
+}
+
+impl Temperature {
+    new!(Temperature);
+}
+
+impl Device for Temperature {
+    std_methods!(Temperature);
+
+    fn register_1wire(&self) -> Vec<String> {
+        vec![self.info.busid.to_string()]
+    }
+
+    fn handle_1wire(&mut self, resp: OW) -> Result<TwoWay> {
+        Ok(match resp.msg {
+            Msg::Devstatus(s) => TwoWay::from_mqtt(self.info.mqtt_msg("temp", centi2float(s.val))),
+            _ => {
+                warn!(
+                    "[{}] {}: no handler for {:?}",
+                    self.info.contno,
+                    self.model(),
+                    resp
+                );
+                TwoWay::default()
+            }
+        })
+    }
+
+    fn announce(&self) -> Vec<MqttMsg> {
+        let dev = self.announce_device();
+        let info = self.info();
+        vec![MqttMsg::retain(
+            format!("homeassistant/sensor/{}/{}/config", info.contno, info.serno),
+            serde_json::to_string(&json!({
+                        "availability_topic": info.status_topic(),
+                        "device": &dev,
+                        "device_class": "temperature",
+                        "expire_after": 600,
+                        "name": self.name(),
+                        "qos": 1,
+                        "unique_id": info.serno,
+                        "state_topic": info.topic("temp"),
+                        "unit_of_measurement": "°C",
+            }))
+            .unwrap(),
+        )]
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -119,5 +171,11 @@ mod test {
         cmp_ow(&mut uut, "1_OWD2_2|510\n", "ESERA/1/OWD2/vdd", "5.1");
         cmp_ow(&mut uut, "1_OWD2_3|5980\n", "ESERA/1/OWD2/hum", "59.8");
         cmp_ow(&mut uut, "1_OWD2_4|332\n", "ESERA/1/OWD2/dew", "3.32");
+    }
+
+    #[test]
+    fn temperature() {
+        let mut uut = Temperature::new(DeviceInfo::new(3, "OWD4", "", "online", "", None).unwrap());
+        cmp_ow(&mut uut, "3_OWD4|1845\n", "ESERA/3/OWD4/temp", "18.45");
     }
 }

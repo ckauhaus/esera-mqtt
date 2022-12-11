@@ -2,7 +2,7 @@
 authors = ["Christian Kauhaus <christian@kauhaus.de>"]
 edition = "2018"
 name = "esera-mqtt"
-version = "0.5.1"
+version = "0.5.2"
 
 [[bin]]
 name = "esera-bridge"

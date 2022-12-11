@@ -102,7 +102,6 @@ enum Mode {
 #[derive(Debug, Clone)]
 pub struct Climate {
     name: String,
-    base: String,
     conf: Conf,
     mode: Mode,
     temp_set: f32,
@@ -116,7 +115,6 @@ impl Climate {
     pub fn new<S: AsRef<str>>(name: S, conf: Conf, log: &Logger) -> Self {
         Self {
             name: name.as_ref().into(),
-            base: format!("{}/{}", BASE, name.as_ref()),
             conf,
             mode: Mode::Heat,
             temp_set: INITIAL_TEMP,

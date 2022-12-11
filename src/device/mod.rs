@@ -319,7 +319,7 @@ mod hub;
 mod shutter;
 mod switch8;
 
-use airquality::{AirQuality, TempHum};
+use airquality::{AirQuality, TempHum, Temperature};
 use binary_sensor::BinarySensor;
 use controller2::Controller2;
 use dimmer::Dimmer;
@@ -338,6 +338,7 @@ pub enum Model {
     TempHum(TempHum),
     Dimmer(Dimmer),
     Shutter(Shutter),
+    Temperature(Temperature),
     Unknown(Unknown),
 }
 
@@ -353,6 +354,7 @@ impl Model {
             "11231" => Self::Shutter(Shutter::new(info)),
             "11322" => Self::Hub(Hub::new(info)),
             "11340" => Self::Controller2(Controller2::new(info)),
+            "DS1820" => Self::Temperature(Temperature::new(info)),
             _ => Self::Unknown(Unknown::new(info)),
         }
     }
