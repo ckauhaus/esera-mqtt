@@ -55,7 +55,7 @@ use nom::combinator::{map, map_res, opt, recognize};
 use nom::multi::{many1, many_m_n};
 use nom::sequence::{delimited, pair, preceded, terminated, tuple};
 
-fn contno(i: &str) -> PResult<u8> {
+fn contno(i: &str) -> PResult<'_, u8> {
     map_res(terminated(digit1, cc('_')), |val: &str| val.parse())(i)
 }
 
@@ -63,7 +63,7 @@ fn header<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, u8> {
     terminated(contno, terminated(tag(key), cc('|')))
 }
 
-fn remainder(i: &str) -> PResult<&str> {
+fn remainder(i: &str) -> PResult<'_, &str> {
     terminated(not_line_ending, line_ending)(i)
 }
 
@@ -71,13 +71,13 @@ fn val<'a>(key: &'static str) -> impl FnMut(&'a str) -> PResult<'a, &'a str> {
     delimited(header(key), not_line_ending, line_ending)
 }
 
-fn timeval(i: &str) -> PResult<&str> {
+fn timeval(i: &str) -> PResult<'_, &str> {
     recognize(many1(one_of("0123456789:")))(i)
 }
 
 pub type Keepalive = char;
 
-pub fn kal(i: &str) -> PResult<OW> {
+pub fn kal(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("KAL"), terminated(one_of("01"), line_ending))),
         |(contno, flag)| OW {
@@ -89,7 +89,7 @@ pub fn kal(i: &str) -> PResult<OW> {
 
 pub type Inf = String;
 
-pub fn inf(i: &str) -> PResult<OW> {
+pub fn inf(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("INF"), terminated(timeval, line_ending))),
         |(contno, dt)| OW {
@@ -102,7 +102,7 @@ pub fn inf(i: &str) -> PResult<OW> {
 /// Controller error. The number denotes the erronous command component
 pub type Err = u16;
 
-pub fn err(i: &str) -> PResult<OW> {
+pub fn err(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("ERR"), terminated(digit1, line_ending))),
         |(contno, v)| OW {
@@ -114,7 +114,7 @@ pub fn err(i: &str) -> PResult<OW> {
 
 pub type Evt = String;
 
-pub fn evt(i: &str) -> PResult<OW> {
+pub fn evt(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("EVT"), terminated(timeval, line_ending))),
         |(contno, dt)| OW {
@@ -126,7 +126,7 @@ pub fn evt(i: &str) -> PResult<OW> {
 
 pub type Rst = char;
 
-pub fn rst(i: &str) -> PResult<OW> {
+pub fn rst(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("RST"), terminated(one_of("01"), line_ending))),
         |(contno, flag)| OW {
@@ -138,7 +138,7 @@ pub fn rst(i: &str) -> PResult<OW> {
 
 pub type Rdy = char;
 
-pub fn rdy(i: &str) -> PResult<OW> {
+pub fn rdy(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("RDY"), terminated(one_of("01"), line_ending))),
         |(contno, flag)| OW {
@@ -149,7 +149,7 @@ pub fn rdy(i: &str) -> PResult<OW> {
 }
 pub type Save = char;
 
-pub fn save(i: &str) -> PResult<OW> {
+pub fn save(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("SAVE"), terminated(one_of("01"), line_ending))),
         |(contno, flag)| OW {
@@ -161,7 +161,7 @@ pub fn save(i: &str) -> PResult<OW> {
 
 pub type Kalsendtime = u8;
 
-pub fn kalsendtime(i: &str) -> PResult<OW> {
+pub fn kalsendtime(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("KALSENDTIME"), terminated(digit1, line_ending))),
         |(contno, s)| OW {
@@ -173,7 +173,7 @@ pub fn kalsendtime(i: &str) -> PResult<OW> {
 
 pub type Dataprint = char;
 
-pub fn dataprint(i: &str) -> PResult<OW> {
+pub fn dataprint(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("DATAPRINT"), terminated(one_of("01"), line_ending))),
         |(contno, flag)| OW {
@@ -185,7 +185,7 @@ pub fn dataprint(i: &str) -> PResult<OW> {
 
 pub type Datatime = u8;
 
-pub fn datatime(i: &str) -> PResult<OW> {
+pub fn datatime(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("DATATIME"), terminated(digit1, line_ending))),
         |(contno, s)| OW {
@@ -197,7 +197,7 @@ pub fn datatime(i: &str) -> PResult<OW> {
 
 pub type Date = String;
 
-pub fn date(i: &str) -> PResult<OW> {
+pub fn date(i: &str) -> PResult<'_, OW> {
     map(
         tuple((
             header("DATE"),
@@ -212,7 +212,7 @@ pub fn date(i: &str) -> PResult<OW> {
 
 pub type Time = String;
 
-pub fn time(i: &str) -> PResult<OW> {
+pub fn time(i: &str) -> PResult<'_, OW> {
     map(
         tuple((header("TIME"), terminated(timeval, line_ending))),
         |(contno, t)| OW {
@@ -232,7 +232,7 @@ pub struct CSI {
     pub hw: String,
 }
 
-pub fn csi(i: &str) -> PResult<OW> {
+pub fn csi(i: &str) -> PResult<'_, OW> {
     map(
         tuple((
             val("CSI"),
@@ -258,7 +258,7 @@ pub fn csi(i: &str) -> PResult<OW> {
     )(i)
 }
 
-fn identifier(i: &str) -> PResult<&str> {
+fn identifier(i: &str) -> PResult<'_, &str> {
     recognize(many1(alt((alphanumeric1, tag("_")))))(i)
 }
 
@@ -286,7 +286,7 @@ impl Default for Status {
 
 pub type List3 = Vec<DeviceInfo>;
 
-pub fn lst3(i: &str) -> PResult<OW> {
+pub fn lst3(i: &str) -> PResult<'_, OW> {
     let (i, contno) = terminated(header("LST3"), remainder)(i)?;
     let head = format!("LST|{}_", contno);
     let (i, items) = many_m_n(
@@ -325,14 +325,11 @@ impl Devstatus {
     /// "OWD3_4" -> Some(4)
     /// "SYS" -> None
     pub fn subaddr(&self) -> Option<u8> {
-        self.addr
-            .rsplit('_')
-            .next()
-            .and_then(|v| v.parse::<u8>().ok())
+        self.addr.rsplit('_').next().and_then(|v| v.parse::<u8>().ok())
     }
 }
 
-pub fn devstatus(i: &str) -> PResult<OW> {
+pub fn devstatus(i: &str) -> PResult<'_, OW> {
     map_res(
         tuple((
             contno,
@@ -377,7 +374,7 @@ impl Into<String> for DIO {
     }
 }
 
-pub fn dio(i: &str) -> PResult<OW> {
+pub fn dio(i: &str) -> PResult<'_, OW> {
     map_res(
         tuple((contno, delimited(tag("DIO|"), digit1, line_ending))),
         |(contno, n)| -> Result<_> {
@@ -395,7 +392,7 @@ pub struct OWDStatus {
     pub status: Status,
 }
 
-pub fn owdstatus(i: &str) -> PResult<OW> {
+pub fn owdstatus(i: &str) -> PResult<'_, OW> {
     map_res(
         tuple((
             contno,
@@ -414,7 +411,7 @@ pub fn owdstatus(i: &str) -> PResult<OW> {
     )(i)
 }
 
-pub fn parse(i: &str) -> PResult<OW> {
+pub fn parse(i: &str) -> PResult<'_, OW> {
     alt((
         kal,
         inf,
